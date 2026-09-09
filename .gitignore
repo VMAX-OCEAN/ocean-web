@@ -1,0 +1,19 @@
+node_modules
+dist
+dist-ssr
+*.local
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# Stray compiled output from running tsc against config files directly
+# (vite.config.ts should only ever be consumed by Vite via esbuild/tsx,
+# never tsc-emitted) — see docs/rendering/optimizations.md
+vite.config.js
+vite.config.d.ts
+vite.config.js.timestamp-*.mjs
