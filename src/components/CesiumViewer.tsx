@@ -36,6 +36,10 @@ export function CesiumViewer({ onReady, onError }: CesiumViewerProps) {
         }
         viewerRef.current = viewer;
 
+        // ponytail: dev-only exposure for D2 bench-harness.js; gate behind
+        // import.meta.env.DEV when prod must not leak viewer.
+        (window as unknown as { __VIEWER__?: Cesium.Viewer }).__VIEWER__ = viewer;
+
         // Signal "ready" immediately so the loading UI clears and the
         // globe/terrain/imagery requests get uncontested network
         // priority. The cloud layer's texture fetch + geometry build
