@@ -80,15 +80,13 @@ export async function createOptimizedViewer(container: HTMLElement): Promise<Ces
   viewer.scene.globe.showGroundAtmosphere = true;
   viewer.scene.backgroundColor = Cesium.Color.BLACK;
 
-  // ─── Natural land/ocean color (Google-Earth-like) ───────────────
-  // Replaces the default Bing Maps Aerial base layer (which Cesium
-  // renders with a gamma=1.3 "washed out" look, see Cesium issue
-  // #3279) with NASA GIBS Blue Marble: Next Generation — a cloud-free,
-  // seasonal, true-color mosaic. Gives natural blue oceans and
-  // realistic green/brown land without the Bing gamma issue or the
-  // cloud/snow artifacts of daily satellite imagery.
+  // ─── Sharp base imagery (Google-Earth-like) ─────────────────────
+  // Esri World Imagery — high-res satellite, no key. Async provider,
+  // fire-and-forget so first paint isn't blocked.
   // See LAND-COLOR-AND-DAYNIGHT-PLAN.md.
-  setNaturalBaseImagery(viewer);
+  setNaturalBaseImagery(viewer).catch((err) =>
+    console.warn('Esri base imagery failed, keeping default:', err),
+  );
 
   // ─── Lighting: OFF — uniformly lit globe, no day/night (see note above) ─
   viewer.scene.globe.enableLighting = false;
