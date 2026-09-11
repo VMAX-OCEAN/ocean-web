@@ -1,0 +1,71 @@
+{
+  "session": "d2-parse-control",
+  "date_iso": "2026-09-11T08:06:22.746Z",
+  "host": "pop-os",
+  "env": {
+    "os": "Linux 7.1.5-76070105-generic x64",
+    "cpu_model": "12th Gen Intel(R) Core(TM) i3-1215U",
+    "logical_cores": 8,
+    "ram_total_gb": 7.98,
+    "ram_free_gb": 3.03,
+    "node": "v24.10.0",
+    "chrome": "Google Chrome 151.0.7922.137",
+    "gpu": {
+      "unmasked_renderer": null,
+      "note": "run browser probe in reference-laptop.md §5 for WebGL2 renderer"
+    },
+    "power_plugged": true,
+    "panel_hz": 60
+  },
+  "parse": [
+    {
+      "N": 100,
+      "raw_bytes": 17120,
+      "gzip_bytes": 1988,
+      "p50_ms": 0.08,
+      "p95_ms": 0.24,
+      "max_ms": 0.24,
+      "iqr_ms": 0.03
+    },
+    {
+      "N": 500,
+      "raw_bytes": 85439,
+      "gzip_bytes": 8973,
+      "p50_ms": 0.35,
+      "p95_ms": 1.09,
+      "max_ms": 1.09,
+      "iqr_ms": 0.05
+    },
+    {
+      "N": 1000,
+      "raw_bytes": 170866,
+      "gzip_bytes": 17636,
+      "p50_ms": 0.66,
+      "p95_ms": 1.2,
+      "max_ms": 1.2,
+      "iqr_ms": 0.03
+    },
+    {
+      "N": 2000,
+      "raw_bytes": 341645,
+      "gzip_bytes": 34924,
+      "p50_ms": 1.49,
+      "p95_ms": 2.3,
+      "max_ms": 2.3,
+      "iqr_ms": 0.14
+    },
+    {
+      "N": 5000,
+      "raw_bytes": 854124,
+      "gzip_bytes": 86829,
+      "p50_ms": 3.71,
+      "p95_ms": 4.62,
+      "max_ms": 4.62,
+      "iqr_ms": 0.6
+    }
+  ],
+  "budget": {
+    "parse_p95_le_50ms_through_5000": true
+  },
+  "note": "synthetic control only; wire/prep/frame/FPS/chunk gates still open"
+}
