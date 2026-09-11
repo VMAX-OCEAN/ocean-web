@@ -15,18 +15,18 @@ same env table, so numbers stay apples-to-apples across teammates.
 Scope: parse control only. Wire bytes, prep, frames, FPS, chunk A/B, cold load
 stay open until the `__VIEWER__` patch + R2 + Supabase exist.
 
-## Run (copy-paste one line, from `ocean-web/` root)
+## Run (copy-paste one line; run from the `VMAX-OCEAN/` parent folder)
 
 Linux / macOS:
 
 ```bash
-node scripts/d2-teammate-bench.mjs && git add d2-results && git commit -m "d2: $(hostname) bench" && git push
+cd ocean-web && node scripts/d2-teammate-bench.mjs && git add d2-results && git commit -m "d2: $(hostname) bench" && git push
 ```
 
 Windows PowerShell:
 
 ```powershell
-node scripts/d2-teammate-bench.mjs; git add d2-results; git commit -m "d2: $env:COMPUTERNAME bench"; git push
+cd ocean-web; node scripts/d2-teammate-bench.mjs; git add d2-results; git commit -m "d2: $env:COMPUTERNAME bench"; git push
 ```
 
 ## After running
