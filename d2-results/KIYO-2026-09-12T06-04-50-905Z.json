@@ -1,0 +1,71 @@
+{
+  "session": "d2-parse-control",
+  "date_iso": "2026-09-12T06:04:50.905Z",
+  "host": "KIYO",
+  "env": {
+    "os": "Windows_NT 10.0.26200 x64",
+    "cpu_model": "13th Gen Intel(R) Core(TM) i5-13450HX",
+    "logical_cores": 16,
+    "ram_total_gb": 16.85,
+    "ram_free_gb": 5.45,
+    "node": "v24.21.0",
+    "chrome": null,
+    "gpu": {
+      "unmasked_renderer": null,
+      "note": "run browser probe in reference-laptop.md §5 for WebGL2 renderer"
+    },
+    "power_plugged": null,
+    "panel_hz": null
+  },
+  "parse": [
+    {
+      "N": 100,
+      "raw_bytes": 17120,
+      "gzip_bytes": 1988,
+      "p50_ms": 0.11,
+      "p95_ms": 0.13,
+      "max_ms": 0.13,
+      "iqr_ms": 0.01
+    },
+    {
+      "N": 500,
+      "raw_bytes": 85439,
+      "gzip_bytes": 8973,
+      "p50_ms": 0.53,
+      "p95_ms": 1.32,
+      "max_ms": 1.32,
+      "iqr_ms": 0.04
+    },
+    {
+      "N": 1000,
+      "raw_bytes": 170866,
+      "gzip_bytes": 17636,
+      "p50_ms": 1.06,
+      "p95_ms": 1.57,
+      "max_ms": 1.57,
+      "iqr_ms": 0.07
+    },
+    {
+      "N": 2000,
+      "raw_bytes": 341645,
+      "gzip_bytes": 34924,
+      "p50_ms": 2.14,
+      "p95_ms": 2.67,
+      "max_ms": 2.67,
+      "iqr_ms": 0.15
+    },
+    {
+      "N": 5000,
+      "raw_bytes": 854124,
+      "gzip_bytes": 86829,
+      "p50_ms": 4.96,
+      "p95_ms": 6.01,
+      "max_ms": 6.01,
+      "iqr_ms": 0.31
+    }
+  ],
+  "budget": {
+    "parse_p95_le_50ms_through_5000": true
+  },
+  "note": "synthetic control only; wire/prep/frame/FPS/chunk gates still open"
+}
