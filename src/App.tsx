@@ -2,6 +2,7 @@ import { useState } from 'react';
 import * as Cesium from 'cesium';
 import { CesiumViewer } from './components/CesiumViewer';
 import { ZoomControls } from './components/ZoomControls';
+import { LocationSearch } from './components/LocationSearch';
 
 function App() {
   const [loading, setLoading] = useState(true);
@@ -18,6 +19,7 @@ function App() {
         onError={(msg) => setError(msg)}
       />
 
+      <LocationSearch viewer={viewer} />
       <ZoomControls viewer={viewer} />
 
       {loading && !error && (
