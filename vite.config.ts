@@ -36,6 +36,13 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       proxy: {
         '/api': env.VITE_API_URL || 'http://localhost:8000',
+        // ERDDAP sends no CORS headers — proxy .png/.csv through same
+        // origin in dev. Prod needs ocean-api or host rewrite for /erddap.
+        '/erddap': {
+          target: 'https://erddap.incois.gov.in',
+          changeOrigin: true,
+          secure: false,
+        },
       },
     },
     resolve: {
