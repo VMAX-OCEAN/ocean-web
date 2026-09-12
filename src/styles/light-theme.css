@@ -36,6 +36,222 @@ html, body, #root {
   touch-action: none;
 }
 
+/* ─── Location search + 3D/4D toggle ─────────────────────────── */
+
+.location-search {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: min(420px, 80vw);
+}
+
+.location-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.location-select {
+  flex: 1;
+  height: 36px;
+  border-radius: 6px;
+  border: none;
+  background: rgba(255, 255, 255, 0.95);
+  color: #1e293b;
+  font-size: 14px;
+  padding: 0 10px;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.location-input {
+  flex: 1;
+  height: 36px;
+  border-radius: 6px;
+  border: none;
+  background: rgba(255, 255, 255, 0.95);
+  color: #1e293b;
+  font-size: 14px;
+  padding: 0 10px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  min-width: 0;
+}
+
+.location-error {
+  font-size: 12px;
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.85);
+  padding: 4px 10px;
+  border-radius: 6px;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.mode-toggle {
+  display: flex;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.mode-button {
+  height: 36px;
+  padding: 0 14px;
+  border: none;
+  background: rgba(255, 255, 255, 0.75);
+  color: #475569;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mode-button.active {
+  background: #0ea5e9;
+  color: #fff;
+}
+
+.mode-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.location-meta {
+  font-size: 12px;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.7);
+  padding: 4px 10px;
+  border-radius: 6px;
+  width: fit-content;
+}
+
+/* ─── Depth panel (4D layers) ─────────────────────────────────── */
+
+.depth-panel {
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.depth-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #7dd3fc;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.depth-slider {
+  width: 100%;
+  accent-color: #0ea5e9;
+  cursor: pointer;
+}
+
+.depth-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.depth-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  min-width: 56px;
+}
+
+.depth-button {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: none;
+  background: rgba(255, 255, 255, 0.15);
+  color: #e2e8f0;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.depth-button:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.depth-ticks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.depth-tick {
+  border: none;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #cbd5e1;
+  font-size: 11px;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+
+.depth-tick.active {
+  background: #0ea5e9;
+  color: #fff;
+}
+
+/* ─── Probe panel (click readout + profile) ───────────────────── */
+
+.probe-panel {
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.probe-reading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.probe-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.probe-sub {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.probe-profile {
+  width: 100%;
+  height: auto;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 6px;
+}
+
+.probe-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
 /* ─── Zoom controls (fallback, always-reliable) ─────────────────── */
 
 .zoom-controls {
