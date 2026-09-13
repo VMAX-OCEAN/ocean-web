@@ -43,6 +43,14 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: false,
         },
+        // Proxy release-data to GitHub Releases in dev.
+        // In production, Vercel rewrites handle this (see vercel.json).
+        '/release-data': {
+          target: 'https://github.com/VMAX-OCEAN/ocean-web/releases/download/data-v1',
+          changeOrigin: true,
+          secure: true,
+          rewrite: (p) => p.replace(/^\/release-data/, ''),
+        },
       },
     },
     resolve: {

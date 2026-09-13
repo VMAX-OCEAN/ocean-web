@@ -65,6 +65,16 @@ export async function toggleCurrents(viewer: Cesium.Viewer): Promise<{
   );
 
   const step = () => {
+    // Guard against viewer being destroyed while the interval is
+    // still active — without this, requestRender() throws on a
+    // destroyed scene. The interval is cleared in stopShow(), but
+    // if the viewer is destroyed externally (e.g. React unmount
+    // without calling clearCurrents first), the interval keeps
+    // firing. This check makes the leak harmless.
+    if (viewer.isDestroyed()) {
+      stopShow(viewer);
+      return;
+    }
     if (!canvas || !field) return;
     ctx.fillStyle = 'rgba(0,0,0,0.08)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -94,6 +104,9 @@ export async function toggleCurrents(viewer: Cesium.Viewer): Promise<{
       }
     }
     ctx.stroke();
+    // requestRenderMode is on — Cesium won't re-render unless asked.
+    // The canvas texture changed, so trigger a render to show it.
+    viewer.scene.requestRender();
   };
 
   step();

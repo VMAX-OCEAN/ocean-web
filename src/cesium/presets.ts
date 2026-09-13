@@ -1,5 +1,5 @@
 import * as Cesium from 'cesium';
-import { clampToVam, vamSlicePng, erddapPngObjectUrl, VAM_DEPTHS_M } from './erddap';
+import { VAM_DEPTHS_M, VAM_BBOX, getSliceCanvas, canvasToBlobUrl } from './binary-data';
 
 /**
  * Preset locations = offline fallback buttons (D7 mandate beats).
@@ -115,42 +115,41 @@ export function showBboxVolume(
     },
   });
 
-  // Live VAM TEMP surface (ZAX 0 = 5 m). Fetched to blob URL first:
-  // Cesium parses ANY string URL into queryParameters and re-serializes,
-  // corrupting the keyless griddap constraint ("=undefined" → ERDDAP 400).
-  // A blob: URL has no query string, so nothing to mangle.
-  const clamped = clampToVam(bbox);
-  if (clamped) {
-    const rect = Cesium.Rectangle.fromDegrees(
-      clamped.west,
-      clamped.south,
-      clamped.east,
-      clamped.north,
-    );
-    const ctl = new AbortController();
-    (showBboxVolume as unknown as { _ctl?: AbortController })._ctl?.abort();
-    (showBboxVolume as unknown as { _ctl?: AbortController })._ctl = ctl;
-    erddapPngObjectUrl(vamSlicePng(clamped, 0), ctl.signal)
-      .then((objUrl) => {
-        if (viewer.isDestroyed()) {
-          URL.revokeObjectURL(objUrl);
-          return;
-        }
-        const provider = new Cesium.SingleTileImageryProvider({
-          url: objUrl,
-          rectangle: rect,
-          tileWidth: 1024,
-          tileHeight: 1024,
-        });
-        const layer = viewer.imageryLayers.addImageryProvider(provider);
-        imageryByViewer.set(viewer, [layer]);
-      })
-      .catch((err) => {
-        if ((err as Error).name !== 'AbortError') {
-          console.warn('VAM surface slice failed:', err);
-        }
+  // Binary VAM TEMP surface (ZAX 0 = 5 m) from local .bin file.
+  // Canvas is transparent where data is NaN (land), so base imagery
+  // shows through. No network, no PNG, no CORS.
+  const clamped = { west: VAM_BBOX.west, south: VAM_BBOX.south, east: VAM_BBOX.east, north: VAM_BBOX.north };
+  const ctl = new AbortController();
+  (showBboxVolume as unknown as { _ctl?: AbortController })._ctl?.abort();
+  (showBboxVolume as unknown as { _ctl?: AbortController })._ctl = ctl;
+  getSliceCanvas('TEMP', 0, 6) // depth 5m, time 2019-03-30
+    .then(async (canvas) => {
+      if (viewer.isDestroyed()) return;
+      const objUrl = await canvasToBlobUrl(canvas);
+      if (viewer.isDestroyed()) {
+        URL.revokeObjectURL(objUrl);
+        return;
+      }
+      const clampedRect = Cesium.Rectangle.fromDegrees(
+        clamped.west,
+        clamped.south,
+        clamped.east,
+        clamped.north,
+      );
+      const provider = new Cesium.SingleTileImageryProvider({
+        url: objUrl,
+        rectangle: clampedRect,
+        tileWidth: 900,
+        tileHeight: 600,
       });
-  }
+      const layer = viewer.imageryLayers.addImageryProvider(provider);
+      imageryByViewer.set(viewer, [layer]);
+    })
+    .catch((err) => {
+      if ((err as Error).name !== 'AbortError') {
+        console.warn('VAM surface slice failed:', err);
+      }
+    });
 
   viewer.entities.add({
     id: `${ENTITY_TAG}:${id}-pin`,
@@ -163,9 +162,7 @@ export function showBboxVolume(
       outlineWidth: 2,
     },
     label: {
-      text: clamped
-        ? `${label}\n${mandate} · VAM TEMP 5 m`
-        : `${label}\n${mandate} · outside VAM box — Copernicus proxy needed`,
+      text: `${label}\n${mandate} · VAM TEMP 5 m`,
       font: '14px sans-serif',
       fillColor: Cesium.Color.WHITE,
       outlineColor: Cesium.Color.BLACK,

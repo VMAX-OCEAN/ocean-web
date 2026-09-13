@@ -4,6 +4,10 @@ import { createGibsTilingScheme } from './gibs-tiling-scheme';
 /**
  * NASA GIBS Black Marble night-lights imagery layer.
  *
+ * DORMANT: This module is currently unused — globe lighting is disabled
+ * (see config.ts) so there is no night side for city lights to show on.
+ * It will be reactivated when day/night lighting is re-enabled.
+ *
  * Adds a city-lights texture that is only visible on the night side of
  * the globe, matching Google Earth's "Time of Day" night-side
  * appearance. Uses Cesium's built-in `dayAlpha`/`nightAlpha` imagery
@@ -52,8 +56,8 @@ export function addNightLightsLayer(viewer: Cesium.Viewer): Cesium.ImageryLayer 
     format: 'image/png',
     tileMatrixSetID: GIBS_TILE_MATRIX_SET_ID,
     maximumLevel: 8,
-    tileWidth: 256,
-    tileHeight: 256,
+    tileWidth: 512,
+    tileHeight: 512,
     tilingScheme: createGibsTilingScheme(),
     credit: new Cesium.Credit('NASA GIBS — VIIRS Black Marble'),
   });

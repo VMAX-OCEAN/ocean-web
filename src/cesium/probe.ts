@@ -1,9 +1,17 @@
-import { vamPointCsv, vamProfileCsv, VAM_ID, type Variable } from './erddap';
+import {
+  getSliceData,
+  samplePoint,
+  VAM_DEPTHS_M,
+  VAM_GRID,
+  VAR_RANGES,
+  VAM_ID,
+  type Variable,
+} from './binary-data';
 
 /**
- * Click-to-query: live VAM point + depth profile via ERDDAP .csv.
- * Every readout carries dataset/var/units/time/source. _FillValue -9999,
- * missing_value, and NaN surface as "no data", never as a number.
+ * Click-to-query: instant point + depth profile from local binary data.
+ * No network, no ERDDAP, no CORS. Values match the displayed slice exactly.
+ * Every readout carries dataset/var/units/time. NaN = "no data".
  */
 
 export interface PointReading {
@@ -29,28 +37,7 @@ export const VAR_META: Record<Variable, { units: string; fill: number }> = {
   SAL: { units: 'PSU', fill: -9999 },
 };
 
-async function fetchCsv(url: string, timeoutMs = 25000): Promise<string[][]> {
-  const ctl = new AbortController();
-  const t = window.setTimeout(() => ctl.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, { signal: ctl.signal });
-    if (!res.ok) throw new Error(`ERDDAP HTTP ${res.status}`);
-    return (await res.text())
-      .trim()
-      .split('\n')
-      .map((line) => line.split(','));
-  } finally {
-    window.clearTimeout(t);
-  }
-}
-
-function clean(raw: string | undefined, fill: number): number | null {
-  if (raw == null || raw === '' || raw === 'NaN') return null;
-  const v = Number(raw);
-  return Number.isNaN(v) || v === fill ? null : v;
-}
-
-/** Live point value at lat/lon/depth/variable/time. */
+/** Instant point value from local binary data (no network). */
 export async function probePoint(
   lat: number,
   lon: number,
@@ -59,32 +46,43 @@ export async function probePoint(
   variable: Variable,
   time: string,
 ): Promise<PointReading> {
-  const url = vamPointCsv(lat, lon, zaxIndex, variable, time);
-  const rows = await fetchCsv(url);
+  const timeIdx = VAM_TIMES_IDX(time);
+  const data = await getSliceData(variable, zaxIndex, timeIdx);
+  const value = samplePoint(data, VAM_GRID.width, VAM_GRID.height, lat, lon);
   return {
     lat,
     lon,
     depthM,
     zaxIndex,
     variable,
-    value: clean(rows[2]?.[4], VAR_META[variable].fill),
-    units: VAR_META[variable].units,
+    value,
+    units: VAR_RANGES[variable].units,
     time,
     dataset: VAM_ID,
-    url,
+    url: `/data/vam/${variable.toLowerCase()}_d${zaxIndex}_t${timeIdx}.bin`,
   };
 }
 
-/** Live depth profile at lat/lon (24 ZAX, variable + time). */
+/** Depth profile at one point — fetches all 24 depth slices in parallel. */
 export async function probeProfile(
   lat: number,
   lon: number,
   variable: Variable,
   time: string,
 ): Promise<ProfileRow[]> {
-  const rows = await fetchCsv(vamProfileCsv(lat, lon, variable, time));
-  return rows.slice(2).map((r) => ({
-    depthM: Number(r[1]),
-    value: clean(r[4], VAR_META[variable].fill),
+  const timeIdx = VAM_TIMES_IDX(time);
+  const slices = await Promise.all(
+    VAM_DEPTHS_M.map((_, depthIdx) => getSliceData(variable, depthIdx, timeIdx)),
+  );
+  return slices.map((data, depthIdx) => ({
+    depthM: VAM_DEPTHS_M[depthIdx],
+    value: samplePoint(data, VAM_GRID.width, VAM_GRID.height, lat, lon),
   }));
+}
+
+/** VAM_TIMES index lookup (imported from binary-data). */
+import { VAM_TIMES } from './binary-data';
+function VAM_TIMES_IDX(time: string): number {
+  const idx = VAM_TIMES.indexOf(time);
+  return idx < 0 ? 6 : idx; // default to 2019-03-30
 }

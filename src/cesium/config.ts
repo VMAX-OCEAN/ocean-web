@@ -1,5 +1,7 @@
 import * as Cesium from 'cesium';
 import { setNaturalBaseImagery } from './base-imagery';
+import { addBorders } from './borders';
+import { addLabels } from './labels';
 
 /**
  * Create a minimal, robust CesiumJS Viewer — just the globe.
@@ -18,12 +20,8 @@ import { setNaturalBaseImagery } from './base-imagery';
  * once. See LAND-COLOR-AND-DAYNIGHT-PLAN.md and CLOUD-WEDGE-FIX-PLAN.md.
  */
 export async function createOptimizedViewer(container: HTMLElement): Promise<Cesium.Viewer> {
-  // Set Cesium Ion token if provided; otherwise Cesium's own default
-  // grandfathered demo token is used (works for World Terrain + Bing Imagery).
-  const token = import.meta.env.VITE_CESIUM_ION_TOKEN;
-  if (token) {
-    Cesium.Ion.defaultAccessToken = token;
-  }
+  // No Cesium ion token needed — we use Re:Earth Terrain (free, open)
+  // and Esri World Imagery (free, no key). No ion dependency at all.
 
   // Create the Viewer IMMEDIATELY with no terrain so the globe paints
   // within a frame or two (smooth WGS84 ellipsoid + default imagery).
@@ -46,6 +44,12 @@ export async function createOptimizedViewer(container: HTMLElement): Promise<Ces
     selectionIndicator: false,
     infoBox: false,
 
+    // Render at full device resolution for crisp labels. Without this,
+    // Cesium caps to browser-recommended resolution (often 1x on high-DPI
+    // displays), making text blurry/pixelated. Cesium forum confirms this
+    // fixes label rendering quality.
+    useBrowserRecommendedResolution: false,
+
     contextOptions: {
       webgl: {
         alpha: false,
@@ -64,11 +68,30 @@ export async function createOptimizedViewer(container: HTMLElement): Promise<Ces
   viewer.scene.globe.preloadAncestors = true;
   viewer.scene.globe.preloadSiblings = true;
 
-  // ─── Fetch speed: raise HTTP/2 request ceiling for ion servers ──
+  // ─── Fetch speed: raise HTTP/2 request ceiling for terrain + imagery ──
   // Cesium's default (18/server) is tuned for older HTTP/1.1 limits.
-  // Cesium ion serves over HTTP/2, which has no such connection cap.
-  // See FETCH-PERFORMANCE-PLAN.md (Phase A1).
-  Cesium.RequestScheduler.requestsByServer['assets.ion.cesium.com:443'] = 30;
+  // Re:Earth Terrain and Esri both serve over HTTP/2.
+  Cesium.RequestScheduler.requestsByServer['terrain.reearth.land:443'] = 30;
+  Cesium.RequestScheduler.requestsByServer['server.arcgisonline.com:443'] = 30;
+
+  // ─── Render mode: only render on demand (biggest idle GPU win) ──
+  // Without this, Cesium renders at 60fps even when the globe is
+  // completely static. With it, Cesium only renders when something
+  // changes (camera move, tile load, explicit requestRender call).
+  // Cloud drift (clouds.ts) and current particles (currents.ts) call
+  // requestRender() per frame they actually animate; everything else
+  // is static and costs zero GPU. See Cesium blog on scene rendering
+  // performance.
+  viewer.scene.requestRenderMode = true;
+  // Re-render if simulation time advances more than this many seconds
+  // (allows background tile loading to trigger periodic refreshes).
+  viewer.scene.maximumRenderTimeChange = Infinity;
+
+  // ─── Depth test: terrain occludes ground primitives ──────────────
+  // Required for borders (GroundPolylinePrimitive) and any clamped
+  // overlays to be correctly hidden behind mountains instead of
+  // showing through terrain. Must be true before borders work.
+  viewer.scene.globe.depthTestAgainstTerrain = true;
 
   // ─── Realistic space look: starfield + atmosphere glow ──────────
   if (viewer.scene.skyBox) {
@@ -88,6 +111,16 @@ export async function createOptimizedViewer(container: HTMLElement): Promise<Ces
     console.warn('Esri base imagery failed, keeping default:', err),
   );
 
+  // ─── Pole fill: ice-white base color ─────────────────────────────
+  // Esri World Imagery uses Web Mercator (EPSG:3857), which cuts off at
+  // ~±85° latitude. Cesium stretches the last tile row to the pole, but
+  // the base color shows through where imagery is thin. Set it to an
+  // ice-white so the poles read as ice rather than black/blue void.
+  // (GIBS polar stereographic overlays were removed: GIBS blocks CORS
+  //  from localhost, so the images can't load in the browser. The
+  //  cloud pole fade + ice-white base color are the effective fixes.)
+  viewer.scene.globe.baseColor = Cesium.Color.fromBytes(240, 245, 250, 255);
+
   // ─── Lighting: OFF — uniformly lit globe, no day/night (see note above) ─
   viewer.scene.globe.enableLighting = false;
   viewer.scene.globe.dynamicAtmosphereLighting = false;
@@ -104,50 +137,73 @@ export async function createOptimizedViewer(container: HTMLElement): Promise<Ces
     destination: Cesium.Cartesian3.fromDegrees(78.0, 15.0, 20000000),
   });
 
-  // ─── Touchpad zoom fix ────────────────────────────────────────────
+  // ─── Touchpad/mouse wheel zoom ────────────────────────────────────
   // A trackpad pinch gesture arrives as a `wheel` event with
   // `ctrlKey: true`. Browsers treat that combination as "zoom the
   // whole webpage" by default, intercepting it before Cesium's own
   // canvas handler gets a clean shot at it. We explicitly prevent
   // that default on every wheel event over the globe so the gesture
   // reaches Cesium's camera controller instead of the browser's page
-  // zoom. See ZOOM-AND-CLOUD-FADE-PLAN.md.
+  // zoom.
+  //
+  // CRITICAL: With requestRenderMode=true, Cesium only re-renders when
+  // it detects a significant scene change. Trackpad scroll generates
+  // tiny deltaY values (±1-5) vs mouse wheel (±100-120). Cesium may not
+  // detect these tiny camera movements as significant enough to trigger
+  // a render — the zoom happens but the globe doesn't visually update.
+  // We explicitly call requestRender() after every wheel event to fix
+  // this. See ZOOM-AND-CLOUD-FADE-PLAN.md.
   container.addEventListener(
     'wheel',
     (event) => {
       event.preventDefault();
+      // Ensure the scene re-renders after Cesium processes the wheel
+      // event. Our handler fires after Cesium's (bubbling: canvas →
+      // container), so Cesium has already moved the camera by the time
+      // we call this.
+      if (!viewer.isDestroyed()) viewer.scene.requestRender();
     },
     { passive: false }
   );
 
   // ─── Async terrain attach (non-blocking) ─────────────────────────
-  // `Terrain.fromWorldTerrain()` returns a Terrain object synchronously;
-  // the underlying provider resolves asynchronously via `readyEvent`.
-  // We attach it to the scene immediately — Cesium streams terrain
-  // tiles in the background while the ellipsoid globe is already
-  // visible. See LOAD-PERF-PLAN.md Fix 2.
-  const terrain = Cesium.Terrain.fromWorldTerrain({
-    requestVertexNormals: true,
-  });
+  // Re:Earth Terrain — free, open, no token, no signup, no key.
+  // Serves quantized-mesh-1.0 tiles with vertex normals + water mask,
+  // covers the whole globe (zoom 0-14). Replaces Cesium ion World
+  // Terrain so we have no ion dependency (no "Upgrade for commercial
+  // use" branding, no ToS restrictions).
+  // https://terrain.reearth.land/
+  const terrainProvider = Cesium.CesiumTerrainProvider.fromUrl(
+    'https://terrain.reearth.land/cesium-mesh/ellipsoid',
+    {
+      requestVertexNormals: true,
+      requestWaterMask: true,
+    },
+  );
+  const terrain = new Cesium.Terrain(terrainProvider);
   viewer.scene.setTerrain(terrain);
 
-  terrain.readyEvent.addEventListener(() => {
-    if (viewer.isDestroyed()) return;
+  // Terrain is ready immediately (provider was awaited). Refine LOD
+  // after a short delay so coarse tiles finish loading first.
+  window.setTimeout(() => {
+    if (!viewer.isDestroyed()) {
+      viewer.scene.globe.maximumScreenSpaceError = 2;
+      viewer.scene.requestRender();
+    }
+  }, 1500);
 
-    // Now that terrain is streaming, refine LOD to default quality.
-    // A short delay lets the coarse tiles finish loading first so the
-    // refinement doesn't trigger a second wave of high-detail requests
-    // while coarse tiles are still in flight.
-    window.setTimeout(() => {
-      if (!viewer.isDestroyed()) {
-        viewer.scene.globe.maximumScreenSpaceError = 2;
-        viewer.scene.requestRender();
-      }
-    }, 1500);
-  });
-
-  terrain.errorEvent.addEventListener((err) => {
-    console.warn('World terrain error, staying on ellipsoid:', err);
+  // ─── Borders + Labels: load after terrain, in idle time ──────────
+  // L0 (continents) + L1 (countries) load immediately in the idle
+  // callback — ~1 MB total, no impact on first paint. L2 + L3
+  // lazy-load as the user zooms in. See BORDERS-PLAN.md.
+  const scheduleIdle =
+    window.requestIdleCallback ??
+    ((cb: () => void) => window.setTimeout(cb, 300));
+  scheduleIdle(() => {
+    if (!viewer.isDestroyed()) {
+      addBorders(viewer);
+      addLabels(viewer);
+    }
   });
 
   return viewer;

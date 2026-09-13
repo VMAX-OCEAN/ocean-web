@@ -20,6 +20,18 @@ Read in this order:
    every performance problem found (WebGL context leak, slow first
    paint, artifact-causing lighting, oversized textures) and the fix
    for each, with before/after numbers where available.
+5. **[05-d2-teammate-bench.md](./05-d2-teammate-bench.md)** —
+   benchmarking harness and results.
+6. **[06-analytics-panel.md](./06-analytics-panel.md)** — the right-side
+   analytics/visualization panel: variable-specific charts, globe↔graph
+   synchronization, color-scale unification, size controls, and the
+   full analytics module architecture (types, configs, data-adapter,
+   chart engine, panel component).
+7. **[07-globe-colormaps.md](./07-globe-colormaps.md)** — variable-specific
+   colormaps for the Cesium globe, replacing the generic blue→green→red
+   gradient with per-variable scientific color scales. Includes bug
+   fixes for stack overflow, wheel handler crash, and colormap safety
+   guards.
 
 ## Companion root-level plan documents
 

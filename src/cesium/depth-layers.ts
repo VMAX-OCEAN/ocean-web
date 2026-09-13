@@ -2,22 +2,31 @@ import * as Cesium from 'cesium';
 import {
   VAM_DEPTHS_M,
   VAM_TIMES,
-  VAM_TIME,
-  clampToVam,
-  vamSlicePng,
-  erddapPngObjectUrl,
-  type Bbox,
+  VAM_BBOX,
+  getSliceCanvas,
+  fetchSliceCanvasForDataset,
+  canvasToBlobUrl,
   type Variable,
-} from './erddap';
+} from './binary-data';
+import { getDataset } from './datasets';
 
 /**
- * Layer-by-layer 4D: single live VAM slice per depth/variable/time.
- * Slider swaps ZAX index, variable toggle swaps TEMP/SAL, time scrub swaps
- * 10-day step — one live slice at a time, never full column.
- * ponytail: swap fetch-blob for ZarrCubeProvider slices when M2 Zarr proven.
+ * Layer-by-layer 4D: binary ocean data rendered directly on the globe.
+ *
+ * Data flow: local .bin file → Float32Array → canvas (3-color colormap) →
+ * globe texture. No PNG, no JSON, no network at runtime.
+ *
+ * The canvas is transparent where data is NaN (land/no-data), so the
+ * base Esri satellite imagery shows through on land. The data colors
+ * appear only on ocean pixels — directly on the globe surface, draped
+ * over terrain.
+ *
+ * Performance: 5-15ms per slice (local fetch + canvas render).
+ * With preload cache: ~0ms for cached adjacent slices.
  */
 
-export { VAM_DEPTHS_M as DEPTHS_M, VAM_TIMES as TIMES, VAM_TIME as DEFAULT_TIME };
+export { VAM_DEPTHS_M as DEPTHS_M, VAM_TIMES as TIMES };
+export const DEFAULT_TIME = VAM_TIMES[6]; // 2019-03-30
 
 const depthLayersByViewer = new WeakMap<Cesium.Viewer, Cesium.ImageryLayer[]>();
 const depthUrlsByViewer = new WeakMap<Cesium.Viewer, string[]>();
@@ -33,14 +42,13 @@ export function clearDepthLayers(viewer: Cesium.Viewer): void {
   requestSeq++;
 }
 
-/** Depth column state for the active bbox (for legend/click readout). */
+/** Depth column state for the active slice (for legend/click readout). */
 export interface DepthState {
-  bbox: Bbox;
   zaxIndex: number;
   depthM: number;
   variable: Variable;
   time: string;
-  url: string;
+  timeIdx: number;
 }
 
 let current: DepthState | null = null;
@@ -49,57 +57,118 @@ export function currentDepthState(): DepthState | null {
 }
 
 /**
- * Show one live depth slice draped on the globe inside bbox.
- * Scope rule: bbox + single ZAX index required, never full column.
- * Outside VAM coverage: clears slice, keeps state null (honest empty).
- * Superseded slider fetches are ignored by sequence guard (no abort needed:
- * completed blobs are revoked on clear).
+ * Show one depth slice directly on the globe (VAM dataset).
+ * Data is rendered from local binary files — no network, no PNG, no JSON.
+ * The canvas is transparent where data is NaN, so land keeps satellite imagery.
  */
-export function showDepthLayers(
+export async function showDepthLayers(
   viewer: Cesium.Viewer,
-  west: number,
-  south: number,
-  east: number,
-  north: number,
+  _west: number,
+  _south: number,
+  _east: number,
+  _north: number,
   activeDepthM: number,
   variable: Variable = 'TEMP',
-  time: string = VAM_TIME,
-): void {
+  time: string = DEFAULT_TIME,
+  rangeOverride?: { min: number; max: number },
+): Promise<void> {
   clearDepthLayers(viewer);
   current = null;
-  const clamped = clampToVam({ west, south, east, north });
-  if (!clamped) return;
+
   const zaxIndex = VAM_DEPTHS_M.indexOf(activeDepthM);
   if (zaxIndex < 0) return;
-  const rect = Cesium.Rectangle.fromDegrees(
-    clamped.west,
-    clamped.south,
-    clamped.east,
-    clamped.north,
-  );
-  const url = vamSlicePng(clamped, zaxIndex, variable, time);
+
+  const timeIdx = VAM_TIMES.indexOf(time);
+  if (timeIdx < 0) return;
+
   const seq = requestSeq;
-  erddapPngObjectUrl(url)
-    .then((objUrl) => {
-      if (viewer.isDestroyed() || seq !== requestSeq) {
-        URL.revokeObjectURL(objUrl);
-        return;
-      }
-      const provider = new Cesium.SingleTileImageryProvider({
-        url: objUrl,
-        rectangle: rect,
-        tileWidth: 1024,
-        tileHeight: 1024,
-      });
-      const layer = viewer.imageryLayers.addImageryProvider(provider);
-      depthLayersByViewer.set(viewer, [layer]);
-      depthUrlsByViewer.set(viewer, [objUrl]);
-    })
-    .catch((err) => console.warn('VAM depth slice failed:', err));
-  current = { bbox: clamped, zaxIndex, depthM: activeDepthM, variable, time, url };
+
+  try {
+    const canvas = await getSliceCanvas(variable, zaxIndex, timeIdx, rangeOverride);
+    if (viewer.isDestroyed() || seq !== requestSeq) return;
+
+    const objUrl = await canvasToBlobUrl(canvas);
+    if (viewer.isDestroyed() || seq !== requestSeq) {
+      URL.revokeObjectURL(objUrl);
+      return;
+    }
+
+    const rect = Cesium.Rectangle.fromDegrees(
+      VAM_BBOX.west, VAM_BBOX.south, VAM_BBOX.east, VAM_BBOX.north,
+    );
+    const provider = new Cesium.SingleTileImageryProvider({
+      url: objUrl,
+      rectangle: rect,
+      tileWidth: 900,
+      tileHeight: 600,
+    });
+    const layer = viewer.imageryLayers.addImageryProvider(provider);
+    depthLayersByViewer.set(viewer, [layer]);
+    depthUrlsByViewer.set(viewer, [objUrl]);
+
+    current = { zaxIndex, depthM: activeDepthM, variable, time, timeIdx };
+    viewer.scene.requestRender();
+  } catch (err) {
+    console.warn('Binary depth slice failed:', err);
+  }
 }
 
-/** Focus camera — kept as no-op anchor for Zarr slice focus later. */
+/**
+ * Show a data slice for ANY dataset on the globe.
+ * Works with any grid size, any bbox, any variable.
+ */
+export async function showDatasetSlice(
+  viewer: Cesium.Viewer,
+  datasetId: string,
+  variableId: string,
+  depthIdx: number,
+  timeIdx: number,
+): Promise<void> {
+  const dataset = getDataset(datasetId);
+  clearDepthLayers(viewer);
+  current = null;
+
+  const seq = requestSeq;
+
+  try {
+    const canvas = await fetchSliceCanvasForDataset(dataset, variableId, depthIdx, timeIdx);
+    if (viewer.isDestroyed() || seq !== requestSeq) return;
+
+    const objUrl = await canvasToBlobUrl(canvas);
+    if (viewer.isDestroyed() || seq !== requestSeq) {
+      URL.revokeObjectURL(objUrl);
+      return;
+    }
+
+    const rect = Cesium.Rectangle.fromDegrees(
+      dataset.bbox.west, dataset.bbox.south,
+      dataset.bbox.east, dataset.bbox.north,
+    );
+    const provider = new Cesium.SingleTileImageryProvider({
+      url: objUrl,
+      rectangle: rect,
+      tileWidth: canvas.width,
+      tileHeight: canvas.height,
+    });
+    const layer = viewer.imageryLayers.addImageryProvider(provider);
+    layer.alpha = 0.85;
+    depthLayersByViewer.set(viewer, [layer]);
+    depthUrlsByViewer.set(viewer, [objUrl]);
+
+    current = {
+      zaxIndex: depthIdx,
+      depthM: dataset.depths[depthIdx] ?? 0,
+      variable: variableId as Variable,
+      time: dataset.times[timeIdx] ?? 'static',
+      timeIdx,
+    };
+    viewer.scene.requestRender();
+  } catch (err) {
+    console.warn('Dataset slice failed:', err);
+  }
+}
+
+/** Focus camera — no-op anchor for future Zarr slice focus. */
 export function focusDepth(viewer: Cesium.Viewer, _depthM: number): void {
   viewer.scene.requestRender();
 }

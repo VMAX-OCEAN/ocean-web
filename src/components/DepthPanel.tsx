@@ -2,58 +2,116 @@ import { useEffect, useRef, useState } from 'react';
 import * as Cesium from 'cesium';
 import {
   DEPTHS_M,
-  TIMES,
   DEFAULT_TIME,
   showDepthLayers,
+  showDatasetSlice,
   clearDepthLayers,
-  focusDepth,
 } from '../cesium/depth-layers';
-import type { Variable } from '../cesium/erddap';
+import type { Variable } from '../cesium/binary-data';
+import {
+  DATASETS,
+  MAIN_DATASET_IDS,
+  ADVANCED_DATASET_IDS,
+  type DatasetConfig,
+  type TimeFrequency,
+} from '../cesium/datasets';
 import { toggleCurrents, clearCurrents } from '../cesium/currents';
 
 interface DepthPanelProps {
   viewer: Cesium.Viewer | null;
-  west: number;
-  south: number;
-  east: number;
-  north: number;
   active: boolean;
+  onDatasetChange?: (datasetId: string) => void;
 }
 
+const FREQ_LABEL: Record<TimeFrequency, string> = {
+  daily: 'Daily',
+  monthly: 'Monthly',
+  static: 'Static',
+};
+
 /**
- * 4D controls: depth slider + TEMP/SAL toggle + 10-day time scrub + play.
- * One live slice at a time; ZarrCubeProvider slices dock into showDepthLayers.
+ * Ocean data controls — product-first layer browser.
+ * Six primary product cards + contextual active-layer config.
+ * All hooks are called unconditionally (Rules of Hooks).
  */
-export function DepthPanel({ viewer, west, south, east, north, active }: DepthPanelProps) {
-  const [depth, setDepth] = useState<number>(DEPTHS_M[0]);
-  const [variable, setVariable] = useState<Variable>('TEMP');
-  const [time, setTime] = useState<string>(DEFAULT_TIME);
+export function DepthPanel({ viewer, active, onDatasetChange }: DepthPanelProps) {
+  // ALL hooks first — never after any early return
+  const [datasetId, setDatasetId] = useState<string>('ph_trend');
+  const [depth, setDepth] = useState<number>(0);
+  const [variable, setVariable] = useState<string>('ph_trend');
+  const [time, setTime] = useState<string>('static');
   const [playing, setPlaying] = useState(false);
   const [stacked, setStacked] = useState(false);
+  const [opacity, setOpacity] = useState<number>(0.85);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [currentsOn, setCurrentsOn] = useState(false);
+  const [currentsMsg, setCurrentsMsg] = useState<string | null>(null);
   const stopRef = useRef(false);
 
-  // Show the live slice as soon as 4D activates; tear down when leaving.
+  const dataset: DatasetConfig = DATASETS[datasetId];
+
+  // Auto-load default slice on mount
   useEffect(() => {
     if (!viewer || !active) return;
-    showDepthLayers(viewer, west, south, east, north, DEPTHS_M[0], 'TEMP', DEFAULT_TIME);
-    setDepth(DEPTHS_M[0]);
-    setVariable('TEMP');
-    setTime(DEFAULT_TIME);
+    if (datasetId === 'vam') {
+      const dsVar = DATASETS.vam.variables[0];
+      showDepthLayers(viewer, 0, 0, 0, 0, DEPTHS_M[0], 'TEMP', DEFAULT_TIME,
+        { min: dsVar.min, max: dsVar.max });
+      setDepth(DEPTHS_M[0]);
+      setVariable('temp');
+      setTime(DEFAULT_TIME);
+    } else {
+      const ds = DATASETS[datasetId];
+      showDatasetSlice(viewer, datasetId, ds.variables[0].id, 0, 0);
+      setVariable(ds.variables[0].id);
+      setTime(ds.times[0]);
+      setDepth(ds.depths[0]);
+    }
     setStacked(true);
     return () => {
       stopRef.current = true;
       setPlaying(false);
       if (!viewer.isDestroyed()) clearDepthLayers(viewer);
     };
-    // Re-stack per location only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewer, active, west, south, east, north]);
+  }, [viewer, active]);
 
   if (!viewer || !active) return null;
 
-  const render = (d: number, v: Variable, t: string) => {
+  const render = (d: number, v: string, t: string) => {
     setStacked(true);
-    showDepthLayers(viewer, west, south, east, north, d, v, t);
+    if (datasetId === 'vam') {
+      const dsVar = dataset.variables.find(x => x.id === v);
+      const range = dsVar ? { min: dsVar.min, max: dsVar.max } : undefined;
+      showDepthLayers(viewer, 0, 0, 0, 0, d, v.toUpperCase() as Variable, t, range);
+    } else {
+      const ds = DATASETS[datasetId];
+      const dIdx = ds.depths.indexOf(d);
+      const tIdx = ds.times.indexOf(t);
+      showDatasetSlice(viewer, datasetId, v, Math.max(0, dIdx), Math.max(0, tIdx));
+    }
+  };
+
+  const pickDataset = (id: string) => {
+    stopRef.current = true;
+    setPlaying(false);
+    setDatasetId(id);
+    onDatasetChange?.(id);
+    const ds = DATASETS[id];
+    if (id === 'vam') {
+      setDepth(DEPTHS_M[0]);
+      setVariable('temp');
+      setTime(DEFAULT_TIME);
+      const dsVar = ds.variables[0];
+      showDepthLayers(viewer, 0, 0, 0, 0, DEPTHS_M[0], 'TEMP', DEFAULT_TIME,
+        { min: dsVar.min, max: dsVar.max });
+    } else {
+      setDepth(ds.depths[0]);
+      setVariable(ds.variables[0].id);
+      setTime(ds.times[0]);
+      showDatasetSlice(viewer, id, ds.variables[0].id, 0, 0);
+    }
+    setStacked(true);
   };
 
   const pick = (d: number) => {
@@ -63,7 +121,7 @@ export function DepthPanel({ viewer, west, south, east, north, active }: DepthPa
     render(d, variable, time);
   };
 
-  const pickVar = (v: Variable) => {
+  const pickVar = (v: string) => {
     stopRef.current = true;
     setPlaying(false);
     setVariable(v);
@@ -81,14 +139,16 @@ export function DepthPanel({ viewer, west, south, east, north, active }: DepthPa
     stopRef.current = false;
     setPlaying(true);
     setStacked(true);
-    let i = DEPTHS_M.indexOf(depth);
+    const times = dataset.times;
+    let i = times.indexOf(time);
+    if (i < 0) i = 0;
     const step = () => {
       if (stopRef.current) return;
-      i = (i + 1) % DEPTHS_M.length;
-      const d = DEPTHS_M[i];
-      setDepth(d);
-      render(d, variable, time);
-      if (i < DEPTHS_M.length - 1) {
+      i = (i + 1) % times.length;
+      const t = times[i];
+      setTime(t);
+      render(depth, variable, t);
+      if (i < times.length - 1) {
         window.setTimeout(step, 900);
       } else {
         setPlaying(false);
@@ -110,9 +170,6 @@ export function DepthPanel({ viewer, west, south, east, north, active }: DepthPa
     setCurrentsOn(false);
   };
 
-  const [currentsOn, setCurrentsOn] = useState(false);
-  const [currentsMsg, setCurrentsMsg] = useState<string | null>(null);
-
   const flipCurrents = async () => {
     setCurrentsMsg('Loading u/v…');
     const r = await toggleCurrents(viewer);
@@ -120,84 +177,200 @@ export function DepthPanel({ viewer, west, south, east, north, active }: DepthPa
     setCurrentsMsg(r.error);
   };
 
+  const dsDepths = dataset.depths;
+  const dsTimes = dataset.times;
+  const dsVars = dataset.variables;
+  const showDepthSlider = dataset.hasDepth && dsDepths.length > 1;
+  const showTimeSlider = dsTimes.length > 1;
+  const showVarSelector = dsVars.length > 1;
+  const currentVar = dsVars.find(v => v.id === variable);
+
+  const renderCard = (id: string) => {
+    const ds = DATASETS[id];
+    const isActive = id === datasetId && stacked;
+    return (
+      <button
+        key={id}
+        className={`product-card${isActive ? ' active' : ''}`}
+        onClick={() => pickDataset(id)}
+        title={ds.label}
+      >
+        <span className="product-icon">{ds.icon}</span>
+        <span className="product-info">
+          <span className="product-name">{ds.product}</span>
+          <span className="product-meta">
+            {ds.coverage} · {FREQ_LABEL[ds.timeFrequency]}
+          </span>
+        </span>
+        <span className={`product-dot${isActive ? ' on' : ''}`} />
+      </button>
+    );
+  };
+
   return (
     <div className="depth-panel">
-      <div className="depth-title">4D · depth layers</div>
-      <input
-        className="depth-slider"
-        type="range"
-        min={0}
-        max={DEPTHS_M.length - 1}
-        step={1}
-        value={DEPTHS_M.indexOf(depth)}
-        onChange={(e) => pick(DEPTHS_M[Number(e.target.value)])}
-        aria-label="Depth layer"
-      />
-      <div className="depth-row">
-        <span className="depth-value">{depth} m</span>
-        <button
-          className={`depth-button${variable === 'TEMP' ? ' active-var' : ''}`}
-          onClick={() => pickVar('TEMP')}
-          title="Temperature (°C)"
-        >
-          TEMP
-        </button>
-        <button
-          className={`depth-button${variable === 'SAL' ? ' active-var' : ''}`}
-          onClick={() => pickVar('SAL')}
-          title="Salinity (PSU)"
-        >
-          SAL
-        </button>
-        <button
-          className="depth-button"
-          onClick={() => focusDepth(viewer, depth)}
-          title="Focus camera on this layer"
-        >
-          Focus
-        </button>
-        <button
-          className="depth-button"
-          onClick={playing ? stop : play}
-        >
-          {playing ? 'Stop' : 'Play ↓'}
-        </button>
-        <button className="depth-button" onClick={clear}>
-          Clear
-        </button>
-        <button
-          className={`depth-button${currentsOn ? ' active-var' : ''}`}
-          onClick={flipCurrents}
-          title="GLORYS surface u/v particles 2019-05-02 (live Zarr)"
-        >
-          Currents
-        </button>
+      <div className="depth-title">Ocean Layers</div>
+
+      {/* Main product cards */}
+      <div className="product-list">
+        {MAIN_DATASET_IDS.map(renderCard)}
       </div>
-      {currentsMsg && <div className="location-meta">{currentsMsg}</div>}
-      <div className="depth-row">
-        <span className="depth-value time-value">{time.slice(0, 10)}</span>
-        <input
-          className="depth-slider"
-          type="range"
-          min={0}
-          max={TIMES.length - 1}
-          step={1}
-          value={TIMES.indexOf(time)}
-          onChange={(e) => pickTime(TIMES[Number(e.target.value)])}
-          aria-label="Time step (10-day)"
-        />
-      </div>
-      <div className="depth-ticks">
-        {DEPTHS_M.map((d) => (
-          <button
-            key={d}
-            className={`depth-tick${d === depth && stacked ? ' active' : ''}`}
-            onClick={() => pick(d)}
-          >
-            {d}
-          </button>
-        ))}
-      </div>
+
+      {/* Advanced section (collapsed) */}
+      <button
+        className="advanced-toggle"
+        onClick={() => setShowAdvanced(s => !s)}
+      >
+        <span>Advanced</span>
+        <span className="advanced-chevron">{showAdvanced ? '▾' : '▸'}</span>
+      </button>
+      {showAdvanced && (
+        <div className="product-list">
+          {ADVANCED_DATASET_IDS.map(renderCard)}
+        </div>
+      )}
+
+      {/* Active layer configuration */}
+      {stacked && (
+        <div className="layer-config">
+          <div className="layer-config-title">
+            {dataset.icon} {dataset.product}
+          </div>
+
+          {/* Variable selector (only if multiple variables) */}
+          {showVarSelector && (
+            <div className="config-row">
+              <span className="config-label">Variable</span>
+              <div className="var-buttons">
+                {dsVars.map(v => (
+                  <button
+                    key={v.id}
+                    className={`depth-button${variable === v.id ? ' active-var' : ''}`}
+                    onClick={() => pickVar(v.id)}
+                    title={`${v.label} (${v.units})`}
+                  >
+                    {v.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Current range display */}
+          {currentVar && (
+            <div className="config-row">
+              <span className="config-label">Range</span>
+              <span className="config-value">
+                {currentVar.min}–{currentVar.max} {currentVar.units}
+              </span>
+            </div>
+          )}
+
+          {/* Depth slider (only if dataset has depth) */}
+          {showDepthSlider && (
+            <>
+              <div className="config-row">
+                <span className="config-label">Depth</span>
+                <span className="config-value">{depth} m</span>
+              </div>
+              <input
+                className="depth-slider"
+                type="range"
+                min={0}
+                max={dsDepths.length - 1}
+                step={1}
+                value={dsDepths.indexOf(depth)}
+                onChange={(e) => pick(dsDepths[Number(e.target.value)])}
+                aria-label="Depth layer"
+              />
+              <div className="depth-ticks">
+                {dsDepths.map((d) => (
+                  <button
+                    key={d}
+                    className={`depth-tick${d === depth && stacked ? ' active' : ''}`}
+                    onClick={() => pick(d)}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* Time slider (only if dataset has multiple times) */}
+          {showTimeSlider && (
+            <>
+              <div className="config-row">
+                <span className="config-label">Time</span>
+                <span className="config-value">
+                  {time === 'static' ? 'Static' : time.slice(0, 10)}
+                </span>
+              </div>
+              <input
+                className="depth-slider"
+                type="range"
+                min={0}
+                max={dsTimes.length - 1}
+                step={1}
+                value={dsTimes.indexOf(time)}
+                onChange={(e) => pickTime(dsTimes[Number(e.target.value)])}
+                aria-label="Time step"
+              />
+            </>
+          )}
+
+          {/* Opacity slider */}
+          <div className="config-row">
+            <span className="config-label">Opacity</span>
+            <span className="config-value">{Math.round(opacity * 100)}%</span>
+          </div>
+          <input
+            className="depth-slider"
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={Math.round(opacity * 100)}
+            onChange={(e) => setOpacity(Number(e.target.value) / 100)}
+            aria-label="Layer opacity"
+          />
+
+          {/* Legend gradient bar */}
+          {currentVar && (
+            <div className="legend-bar-container">
+              <div
+                className="legend-bar"
+                style={{
+                  background: `linear-gradient(to right, #440154, #3b528b, #21918c, #5ec962, #fde725)`,
+                }}
+              />
+              <div className="legend-labels">
+                <span>{currentVar.min}</span>
+                <span>{currentVar.units}</span>
+                <span>{currentVar.max}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Playback + clear controls */}
+          <div className="config-controls">
+            <button className="depth-button" onClick={playing ? stop : play}>
+              {playing ? '⏹ Stop' : '▶ Play'}
+            </button>
+            <button className="depth-button" onClick={clear}>Clear</button>
+            {datasetId === 'vam' && (
+              <button
+                className={`depth-button${currentsOn ? ' active-var' : ''}`}
+                onClick={flipCurrents}
+                title="GLORYS surface u/v particles"
+              >
+                Currents
+              </button>
+            )}
+          </div>
+          {currentsMsg && <div className="location-meta">{currentsMsg}</div>}
+        </div>
+      )}
     </div>
   );
 }

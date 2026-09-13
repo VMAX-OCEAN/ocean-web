@@ -1,29 +1,18 @@
 {
-  "headers": [
-    {
-      "source": "/cesium/(.*)",
-      "headers": [
-        {
-          "value": "public, max-age=31536000, immutable",
-          "key": "Cache-Control"
-        }
-      ]
-    },
-    {
-      "source": "/assets/(.*)",
-      "headers": [
-        {
-          "value": "public, max-age=31536000, immutable",
-          "key": "Cache-Control"
-        }
-      ]
-    }
-  ],
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
     {
-      "source": "/((?!api/).*)",
-      "destination": "/index.html"
+      "source": "/release-data/:path*",
+      "destination": "https://github.com/VMAX-OCEAN/ocean-web/releases/download/data-v1/:path*"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/release-data/(.*)",
+      "headers": [
+        { "key": "CDN-Cache-Control", "value": "max-age=86400" },
+        { "key": "Access-Control-Allow-Origin", "value": "*" }
+      ]
     }
   ]
 }

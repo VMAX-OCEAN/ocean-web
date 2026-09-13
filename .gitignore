@@ -4,7 +4,11 @@ dist-ssr
 *.local
 .venv*
 __pycache__/
-public/zarr/
+# Large binary data — served from GitHub Releases, not committed.
+# See src/cesium/release-data.ts for the release loader.
+public/data/
+# Downloaded source data (NetCDF, intermediate ZIPs) — not committed.
+downloads/
 .env
 .env.*
 !.env.example

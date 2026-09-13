@@ -2,24 +2,20 @@ import { useEffect, useState } from 'react';
 import * as Cesium from 'cesium';
 import { probePoint, probeProfile, type PointReading, type ProfileRow } from '../cesium/probe';
 import { currentDepthState } from '../cesium/depth-layers';
-import { VAM_ID } from '../cesium/erddap';
+import { VAM_ID } from '../cesium/binary-data';
 import { showFloats, clearFloats, type FloatPoint } from '../cesium/floats';
+import { DATASETS } from '../cesium/datasets';
 
 interface ProbePanelProps {
   viewer: Cesium.Viewer | null;
-  west: number;
-  south: number;
-  east: number;
-  north: number;
   active: boolean;
 }
 
 /**
- * Click readout + depth profile + Argo float markers, all live ERDDAP.
- * Legend cites dataset/units/time. Residual = model − obs gated: shown only
- * when a VAM model value AND a QC=1 float obs exist at the click.
+ * Click readout + depth profile + Argo float markers.
+ * Uses local binary data for instant queries — no network.
  */
-export function ProbePanel({ viewer, west, south, east, north, active }: ProbePanelProps) {
+export function ProbePanel({ viewer, active }: ProbePanelProps) {
   const [reading, setReading] = useState<PointReading | null>(null);
   const [profile, setProfile] = useState<ProfileRow[] | null>(null);
   const [floatPick, setFloatPick] = useState<FloatPoint | null>(null);
@@ -28,15 +24,16 @@ export function ProbePanel({ viewer, west, south, east, north, active }: ProbePa
   const [residual, setResidual] = useState<number | null>(null);
   const [status, setStatus] = useState<string | null>(null);
 
-  // Float markers per bbox+month (Fani window default from time scrub).
+  // Float markers (VAM dataset only)
   useEffect(() => {
     if (!viewer || !active) return;
     let cancelled = false;
     if (floatsOn) {
-      setStatus('Loading live floats…');
+      setStatus('Loading floats…');
+      const ds = DATASETS.vam;
       showFloats(
         viewer,
-        { west, south, east, north },
+        { west: ds.bbox.west, south: ds.bbox.south, east: ds.bbox.east, north: ds.bbox.north },
         '2019-03-01T00:00:00Z',
         '2019-04-01T00:00:00Z',
         (p) => setFloatPick(p),
@@ -54,26 +51,24 @@ export function ProbePanel({ viewer, west, south, east, north, active }: ProbePa
       cancelled = true;
       if (!viewer.isDestroyed()) clearFloats(viewer);
     };
-  }, [viewer, active, floatsOn, west, south, east, north]);
+  }, [viewer, active, floatsOn]);
 
+  // Click handler for point query
   useEffect(() => {
     if (!viewer || !active) return;
     const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
     handler.setInputAction(async (click: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
-      // Float marker picked first (object-as-query).
       const picked = viewer.scene.pick(click.position);
       const floatProp = picked?.id?.properties?.float?.getValue?.();
       if (floatProp) {
         try {
           setFloatPick(JSON.parse(floatProp) as FloatPoint);
-        } catch {
-          /* keep prior pick */
-        }
+        } catch { /* keep prior pick */ }
         return;
       }
       const state = currentDepthState();
       if (!state) {
-        setStatus('Pick a location inside the VAM box first.');
+        setStatus('Select a dataset and variable first.');
         return;
       }
       const cart = viewer.camera.pickEllipsoid(click.position, viewer.scene.globe.ellipsoid);
@@ -81,7 +76,7 @@ export function ProbePanel({ viewer, west, south, east, north, active }: ProbePa
       const c = Cesium.Cartographic.fromCartesian(cart);
       const lat = +Cesium.Math.toDegrees(c.latitude).toFixed(3);
       const lon = +Cesium.Math.toDegrees(c.longitude).toFixed(3);
-      setStatus('Querying live VAM…');
+      setStatus('Querying…');
       setProfile(null);
       setResidual(null);
       try {
@@ -111,7 +106,6 @@ export function ProbePanel({ viewer, west, south, east, north, active }: ProbePa
     }
   }, [active]);
 
-  // Residual gated: VAM model value + QC=1 float obs at same click.
   useEffect(() => {
     if (
       reading?.value != null &&
@@ -137,7 +131,7 @@ export function ProbePanel({ viewer, west, south, east, north, active }: ProbePa
 
   return (
     <div className="probe-panel">
-      <div className="depth-title">Click readout · live</div>
+      <div className="depth-title">Click Readout</div>
       {status && <div className="location-meta">{status}</div>}
       <div className="depth-row">
         <button className="depth-button" onClick={() => setFloatsOn((v) => !v)}>
@@ -190,7 +184,7 @@ export function ProbePanel({ viewer, west, south, east, north, active }: ProbePa
       )}
       <div className="probe-legend">
         <span>VAM {reading?.variable ?? 'TEMP'} · {VAM_ID}</span>
-        <span>Fill -9999 / NaN = no data · green float = QC1</span>
+        <span>Fill NaN = no data · green float = QC1</span>
       </div>
     </div>
   );
