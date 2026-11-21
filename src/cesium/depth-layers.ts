@@ -5,10 +5,10 @@ import {
   VAM_BBOX,
   getSliceCanvas,
   fetchSliceCanvasForDataset,
-  canvasToBlobUrl,
   type Variable,
 } from './binary-data';
 import { getDataset } from './datasets';
+import { CanvasImageryProvider } from './canvas-provider';
 
 /**
  * Layer-by-layer 4D: binary ocean data rendered directly on the globe.
@@ -29,17 +29,62 @@ export { VAM_DEPTHS_M as DEPTHS_M, VAM_TIMES as TIMES };
 export const DEFAULT_TIME = VAM_TIMES[6]; // 2019-03-30
 
 const depthLayersByViewer = new WeakMap<Cesium.Viewer, Cesium.ImageryLayer[]>();
-const depthUrlsByViewer = new WeakMap<Cesium.Viewer, string[]>();
 let requestSeq = 0;
 
-/** Remove depth slice layer + revoke blob URLs. */
+/** Bump request sequence to cancel any in-flight slice renders. */
+function bumpSeq(): number {
+  requestSeq++;
+  return requestSeq;
+}
+
+/** Remove depth slice layer (no blob URLs to revoke with CanvasImageryProvider). */
 export function clearDepthLayers(viewer: Cesium.Viewer): void {
   const layers = depthLayersByViewer.get(viewer) ?? [];
   for (const l of layers) viewer.imageryLayers.remove(l, true);
   depthLayersByViewer.set(viewer, []);
-  for (const u of depthUrlsByViewer.get(viewer) ?? []) URL.revokeObjectURL(u);
-  depthUrlsByViewer.set(viewer, []);
-  requestSeq++;
+  bumpSeq();
+}
+
+/**
+ * Swap imagery layers without flicker.
+ *
+ * The key insight: Cesium's `addImageryProvider()` adds the layer to the
+ * collection instantly, but the layer's texture isn't uploaded/rendered
+ * until the next render cycle(s). If we remove the old layer immediately,
+ * there's a 1-2 frame gap where neither old nor new is visible = flicker.
+ *
+ * Fix: add the new layer, then defer old-layer removal until Cesium has
+ * actually rendered the new layer (detected via `scene.postRender`).
+ * We wait for 2 postRender events to be safe (texture upload + paint).
+ */
+function swapLayers(
+  viewer: Cesium.Viewer,
+  newLayer: Cesium.ImageryLayer,
+): void {
+  const oldLayers = depthLayersByViewer.get(viewer) ?? [];
+  depthLayersByViewer.set(viewer, [newLayer]);
+
+  if (oldLayers.length === 0) {
+    // No old layer to remove — nothing to defer.
+    return;
+  }
+
+  // Defer old-layer removal until the new layer has been rendered.
+  // This is the critical anti-flicker mechanism.
+  let renderCount = 0;
+  const removeOld = () => {
+    renderCount++;
+    // Wait for 2 render cycles to ensure the new texture is fully
+    // uploaded and painted before tearing down the old layer.
+    if (renderCount >= 2) {
+      for (const l of oldLayers) {
+        if (!l.isDestroyed()) viewer.imageryLayers.remove(l, true);
+      }
+      viewer.scene.postRender.removeEventListener(removeOld);
+    }
+  };
+  viewer.scene.postRender.addEventListener(removeOld);
+  viewer.scene.requestRender();
 }
 
 /** Depth column state for the active slice (for legend/click readout). */
@@ -59,7 +104,7 @@ export function currentDepthState(): DepthState | null {
 /**
  * Show one depth slice directly on the globe (VAM dataset).
  * Data is rendered from local binary files — no network, no PNG, no JSON.
- * The canvas is transparent where data is NaN, so land keeps satellite imagery.
+ * The canvas is transparent where data is NaN (land/no-data), so land keeps satellite imagery.
  */
 export async function showDepthLayers(
   viewer: Cesium.Viewer,
@@ -72,8 +117,7 @@ export async function showDepthLayers(
   time: string = DEFAULT_TIME,
   rangeOverride?: { min: number; max: number },
 ): Promise<void> {
-  clearDepthLayers(viewer);
-  current = null;
+  const seq = bumpSeq();
 
   const zaxIndex = VAM_DEPTHS_M.indexOf(activeDepthM);
   if (zaxIndex < 0) return;
@@ -81,33 +125,31 @@ export async function showDepthLayers(
   const timeIdx = VAM_TIMES.indexOf(time);
   if (timeIdx < 0) return;
 
-  const seq = requestSeq;
-
   try {
     const canvas = await getSliceCanvas(variable, zaxIndex, timeIdx, rangeOverride);
     if (viewer.isDestroyed() || seq !== requestSeq) return;
 
-    const objUrl = await canvasToBlobUrl(canvas);
-    if (viewer.isDestroyed() || seq !== requestSeq) {
-      URL.revokeObjectURL(objUrl);
-      return;
-    }
-
     const rect = Cesium.Rectangle.fromDegrees(
       VAM_BBOX.west, VAM_BBOX.south, VAM_BBOX.east, VAM_BBOX.north,
     );
-    const provider = new Cesium.SingleTileImageryProvider({
-      url: objUrl,
+    const provider = new CanvasImageryProvider({
+      canvas,
       rectangle: rect,
-      tileWidth: 900,
-      tileHeight: 600,
+      tileWidth: canvas.width,
+      tileHeight: canvas.height,
     });
-    const layer = viewer.imageryLayers.addImageryProvider(provider);
-    depthLayersByViewer.set(viewer, [layer]);
-    depthUrlsByViewer.set(viewer, [objUrl]);
 
-    current = { zaxIndex, depthM: activeDepthM, variable, time, timeIdx };
-    viewer.scene.requestRender();
+    const newLayer = viewer.imageryLayers.addImageryProvider(provider);
+    newLayer.alpha = 0.85;
+    swapLayers(viewer, newLayer);
+
+    current = {
+      zaxIndex,
+      depthM: activeDepthM,
+      variable,
+      time,
+      timeIdx,
+    };
   } catch (err) {
     console.warn('Binary depth slice failed:', err);
   }
@@ -125,35 +167,26 @@ export async function showDatasetSlice(
   timeIdx: number,
 ): Promise<void> {
   const dataset = getDataset(datasetId);
-  clearDepthLayers(viewer);
-  current = null;
-
-  const seq = requestSeq;
+  const seq = bumpSeq();
 
   try {
     const canvas = await fetchSliceCanvasForDataset(dataset, variableId, depthIdx, timeIdx);
     if (viewer.isDestroyed() || seq !== requestSeq) return;
 
-    const objUrl = await canvasToBlobUrl(canvas);
-    if (viewer.isDestroyed() || seq !== requestSeq) {
-      URL.revokeObjectURL(objUrl);
-      return;
-    }
-
     const rect = Cesium.Rectangle.fromDegrees(
       dataset.bbox.west, dataset.bbox.south,
       dataset.bbox.east, dataset.bbox.north,
     );
-    const provider = new Cesium.SingleTileImageryProvider({
-      url: objUrl,
+    const provider = new CanvasImageryProvider({
+      canvas,
       rectangle: rect,
       tileWidth: canvas.width,
       tileHeight: canvas.height,
     });
-    const layer = viewer.imageryLayers.addImageryProvider(provider);
-    layer.alpha = 0.85;
-    depthLayersByViewer.set(viewer, [layer]);
-    depthUrlsByViewer.set(viewer, [objUrl]);
+
+    const newLayer = viewer.imageryLayers.addImageryProvider(provider);
+    newLayer.alpha = 0.85;
+    swapLayers(viewer, newLayer);
 
     current = {
       zaxIndex: depthIdx,
@@ -162,7 +195,6 @@ export async function showDatasetSlice(
       time: dataset.times[timeIdx] ?? 'static',
       timeIdx,
     };
-    viewer.scene.requestRender();
   } catch (err) {
     console.warn('Dataset slice failed:', err);
   }

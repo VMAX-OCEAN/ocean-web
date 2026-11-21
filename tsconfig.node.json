@@ -8,7 +8,8 @@
       "node"
     ],
     "module": "ESNext",
-    "composite": true
+    "composite": true,
+    "emitDeclarationOnly": true
   },
   "include": [
     "vite.config.ts"

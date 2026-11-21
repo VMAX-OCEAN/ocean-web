@@ -20,7 +20,7 @@
  */
 
 import { type DatasetConfig, buildBinPath } from './datasets';
-import { getColormap, valueToColor, type Colormap } from './colormaps';
+import { getColormap, sampleColormap, type Colormap } from './colormaps';
 import { fetchReleaseBin, isReleaseDataPath } from './release-data';
 
 /** VAM grid dimensions (kept for backwards compat). */
@@ -70,28 +70,66 @@ export function binPath(variable: Variable, depthIdx: number, timeIdx: number): 
   return `/data/vam/${variable.toLowerCase()}_d${depthIdx}_t${timeIdx}.bin`;
 }
 
-/** Fetch a .bin file and return as Float32Array. */
+/** Fetch a .bin file and return as Float32Array.
+ *
+ *  Tries local /data/ path first (instant — files served from public/data/
+ *  by Vite's static file server). Falls back to /release-data/ (GitHub
+ *  Releases ZIP download + extraction) if the local file doesn't exist.
+ *  This keeps local dev fast while preserving the release-based flow
+ *  for production and for anyone without local data.
+ */
 export async function fetchBinData(path: string): Promise<Float32Array> {
-  // Release data paths are fetched from GitHub Releases via ZIP extraction
+  // If this is a release-data path, try the local /data/ equivalent first.
   if (isReleaseDataPath(path)) {
+    const localPath = path.replace(/^\/release-data\//, '/data/');
+    try {
+      const response = await fetch(localPath);
+      if (response.ok) {
+        const buffer = await response.arrayBuffer();
+        return new Float32Array(buffer);
+      }
+    } catch {
+      // Local fetch failed (e.g. file not found) — fall through to release-data
+    }
+    // Fall back to GitHub Releases via ZIP extraction
     return fetchReleaseBin(path);
   }
-  // Local dev fallback: fetch directly from public/data/
+  // Non-release path: fetch directly
   const response = await fetch(path);
   if (!response.ok) throw new Error(`Binary data HTTP ${response.status}`);
   const buffer = await response.arrayBuffer();
   return new Float32Array(buffer);
 }
 
-// ─── Land mask (Natural Earth ne_110m_land) ────────────────────────
+// ─── Land mask (Natural Earth ne_50m_land) ─────────────────────────
+//
+// Upgraded from ne_110m_land (1:110M scale, 136KB, very coarse — visibly
+// blocky coastlines that don't match the Esri satellite basemap) to
+// ne_50m_land (1:50M scale, 1.6MB, ~10x more coastline detail).
+//
+// The mask edge is also feathered with a small blur before compositing,
+// so the ocean-color-to-transparent transition at the coast is a smooth
+// gradient instead of a jagged, aliased binary cutoff.
 
 let landMaskCanvas: HTMLCanvasElement | null = null;
 let landMaskBbox: { west: number; south: number; east: number; north: number } | null = null;
+let landMaskGeojsonPromise: Promise<any> | null = null;
+
+/** Fetch and cache the land mask GeoJSON (fetched once, reused for all bboxes). */
+function getLandMaskGeojson(): Promise<any> {
+  if (!landMaskGeojsonPromise) {
+    landMaskGeojsonPromise = fetch('/masks/ne_50m_land.geojson').then(response => {
+      if (!response.ok) throw new Error(`Land mask HTTP ${response.status}`);
+      return response.json();
+    });
+  }
+  return landMaskGeojsonPromise;
+}
 
 /**
  * Load the Natural Earth land mask and render it to a canvas at the
- * upscaled resolution. Land = opaque black, ocean = transparent.
- * This canvas is used to clip data via composite operations.
+ * upscaled resolution. Land = opaque black (feathered edge), ocean =
+ * transparent. This canvas is used to clip data via composite operations.
  */
 async function getLandMaskCanvas(
   bbox: { west: number; south: number; east: number; north: number },
@@ -106,37 +144,43 @@ async function getLandMaskCanvas(
     return landMaskCanvas;
   }
 
-  const response = await fetch('/masks/ne_110m_land.geojson');
-  if (!response.ok) throw new Error(`Land mask HTTP ${response.status}`);
-  const geojson = await response.json();
-
-  const canvas = document.createElement('canvas');
-  canvas.width = upscaleW;
-  canvas.height = upscaleH;
-  const ctx = canvas.getContext('2d')!;
-
-  // Fill transparent (ocean = no mask)
-  ctx.clearRect(0, 0, upscaleW, upscaleH);
-
-  // Draw land polygons in opaque black
-  ctx.fillStyle = '#000000';
+  const geojson = await getLandMaskGeojson();
 
   const w = upscaleW;
   const h = upscaleH;
   const lonToX = (lon: number) => ((lon - bbox.west) / (bbox.east - bbox.west)) * w;
   const latToY = (lat: number) => ((bbox.north - lat) / (bbox.north - bbox.south)) * h;
 
+  // Step 1: draw crisp land polygons to an offscreen canvas (no filter).
+  const rawCanvas = document.createElement('canvas');
+  rawCanvas.width = w;
+  rawCanvas.height = h;
+  const rawCtx = rawCanvas.getContext('2d')!;
+  rawCtx.fillStyle = '#000000';
+
   for (const feature of geojson.features) {
     if (!feature || !feature.geometry) continue;
     const geom = feature.geometry;
     if (geom.type === 'Polygon') {
-      drawPolygon(ctx, geom.coordinates, lonToX, latToY);
+      drawPolygon(rawCtx, geom.coordinates, lonToX, latToY);
     } else if (geom.type === 'MultiPolygon') {
       for (const polygon of geom.coordinates) {
-        drawPolygon(ctx, polygon, lonToX, latToY);
+        drawPolygon(rawCtx, polygon, lonToX, latToY);
       }
     }
   }
+
+  // Step 2: composite onto the final mask with a small blur, feathering
+  // the coastline edge into a smooth alpha gradient (1.5-4px depending on
+  // canvas resolution) instead of a hard binary cutoff.
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d')!;
+  const featherPx = Math.max(1.5, Math.min(4, w / 1200));
+  ctx.filter = `blur(${featherPx}px)`;
+  ctx.drawImage(rawCanvas, 0, 0);
+  ctx.filter = 'none';
 
   landMaskCanvas = canvas;
   landMaskBbox = { ...bbox };
@@ -203,9 +247,10 @@ function dataToSmallCanvas(
         // Transparent — will be masked anyway
         pixels[pixelIdx + 3] = 0;
       } else {
-        // Normalize to [0, 1] and apply variable-specific colormap
+        // Normalize to [0, 1] using the (possibly auto-scaled) range,
+        // then sample the colormap stops directly.
         const t = (value - minVal) / (maxVal - minVal);
-        const [r, g, b] = valueToColor(colormap, minVal + t * (maxVal - minVal));
+        const [r, g, b] = sampleColormap(colormap.stops, t);
         pixels[pixelIdx] = r;
         pixels[pixelIdx + 1] = g;
         pixels[pixelIdx + 2] = b;
@@ -332,10 +377,14 @@ export async function fetchSliceCanvasForDataset(
   // Step 1: Render data to small canvas with variable-specific colormap
   const smallCanvas = dataToSmallCanvas(data, gridW, gridH, minVal, maxVal, colormap);
 
-  // Step 2: Upscale with GPU-accelerated bilinear smoothing
-  // Cap upscale so we don't create huge canvases for already-large grids
-  const targetW = Math.min(gridW * UPSCALE, 3600);
-  const targetH = Math.min(gridH * UPSCALE, 1800);
+  // Step 2: Upscale with GPU-accelerated bilinear smoothing.
+  // Render at native grid resolution (or 2× max for small grids) and let
+  // Cesium's GPU handle the final upscale to screen resolution. This cuts
+  // texture size by up to 6× vs the previous 3600×1800 target, with no
+  // visible quality loss because Cesium bilinear-samples the texture on the
+  // GPU — the same smoothing the canvas was doing.
+  const targetW = Math.min(gridW * 2, 2880);
+  const targetH = Math.min(gridH * 2, 1440);
   const bigCanvas = document.createElement('canvas');
   bigCanvas.width = targetW;
   bigCanvas.height = targetH;

@@ -21,6 +21,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import * as Cesium from 'cesium';
 import { TimeSeriesChart } from './TimeSeriesChart';
+import { HistogramChart } from './HistogramChart';
 import {
   getVariableConfig,
   getYearColor,
@@ -34,14 +35,17 @@ import {
   toAnomalies,
   getLatestValue,
   computeTrend,
+  getSpatialHistogram,
 } from '../analytics/data-adapter';
-import type { VariableId, Resolution, Mode, ChartSeries, TimeSeriesPoint } from '../analytics/types';
+import type { VariableId, Resolution, Mode, ChartSeries, TimeSeriesPoint, SpatialStats } from '../analytics/types';
 
 interface AnalyticsPanelProps {
   viewer: Cesium.Viewer | null;
   active: boolean;
   /** Currently selected dataset ID from the LEFT sidebar (single source of truth) */
   currentDatasetId: string | null;
+  /** Currently selected time step (synced with the globe play button) */
+  currentTime?: string | null;
   /** Chart height in px (user-controllable from the size overlay) */
   chartHeight?: number;
 }
@@ -52,11 +56,12 @@ const DATASET_TO_VARIABLE: Record<string, VariableId> = {
   mhw: 'mhw',
   sea_level: 'sea_level',
   ph_surface: 'ocean_acidification',
+  ph_trend: 'ph_trend',
   sea_ice_arctic: 'arctic_ice',
   sea_ice_antarctic: 'antarctic_ice',
 };
 
-export function AnalyticsPanel({ viewer, active, currentDatasetId, chartHeight = 220 }: AnalyticsPanelProps) {
+export function AnalyticsPanel({ viewer, active, currentDatasetId, currentTime, chartHeight = 220 }: AnalyticsPanelProps) {
   void viewer; // reserved for future globe↔graph hover sync
   // Derive the analytics variable from the left sidebar selection.
   const variableId: VariableId | null = currentDatasetId ? DATASET_TO_VARIABLE[currentDatasetId] ?? null : null;
@@ -66,16 +71,19 @@ export function AnalyticsPanel({ viewer, active, currentDatasetId, chartHeight =
   const [selectedYears, setSelectedYears] = useState<number[]>([2024, 2023, 2022]);
   const [showReference, setShowReference] = useState(true);
   const [fullSeries, setFullSeries] = useState<TimeSeriesPoint[]>([]);
+  const [histogram, setHistogram] = useState<SpatialStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [selectedPoint, setSelectedPoint] = useState<TimeSeriesPoint | null>(null);
   void selectedPoint; // reserved for future globe↔graph hover sync
 
   const config = useMemo(() => (variableId ? getVariableConfig(variableId) : null), [variableId]);
+  const isHistogramType = config?.chartType === 'histogram';
 
   // When the left-sidebar selection changes, reset state and load data.
   useEffect(() => {
     if (!active || !variableId || !config) {
       setFullSeries([]);
+      setHistogram(null);
       return;
     }
     setLoading(true);
@@ -84,6 +92,23 @@ export function AnalyticsPanel({ viewer, active, currentDatasetId, chartHeight =
     setMode('absolute');
     setShowReference(true);
 
+    if (config.chartType === 'histogram') {
+      // Static spatial map (e.g. pH Trend) — no time series, load a
+      // value-distribution histogram from the single global map instead.
+      setFullSeries([]);
+      getSpatialHistogram(config)
+        .then(stats => {
+          setHistogram(stats);
+          setLoading(false);
+        })
+        .catch(() => {
+          setHistogram(null);
+          setLoading(false);
+        });
+      return;
+    }
+
+    setHistogram(null);
     getFullTimeSeries(variableId, config)
       .then(series => {
         setFullSeries(series);
@@ -237,11 +262,20 @@ export function AnalyticsPanel({ viewer, active, currentDatasetId, chartHeight =
       {/* ── Layer title + summary metric ── */}
       <div className="analytics-header">
         <div className="analytics-title">{config.title}</div>
-        {summary?.latest && Number.isFinite(summary.latest.value) && (
-          <div className="analytics-metric">
-            <span className="metric-value">{formatVal(summary.latest.value)}</span>
-            <span className="metric-unit">{config.unit}</span>
-          </div>
+        {isHistogramType ? (
+          histogram && Number.isFinite(histogram.mean) && (
+            <div className="analytics-metric">
+              <span className="metric-value">{formatVal(histogram.mean)}</span>
+              <span className="metric-unit">{config.unit}</span>
+            </div>
+          )
+        ) : (
+          summary?.latest && Number.isFinite(summary.latest.value) && (
+            <div className="analytics-metric">
+              <span className="metric-value">{formatVal(summary.latest.value)}</span>
+              <span className="metric-unit">{config.unit}</span>
+            </div>
+          )
         )}
         <div className="analytics-trend-row">
           {config.hasUncertainty && config.uncertainty && (
@@ -250,52 +284,70 @@ export function AnalyticsPanel({ viewer, active, currentDatasetId, chartHeight =
           <span className="analytics-trend">Trend: {config.trendStatement}</span>
         </div>
         <div className="analytics-ref-period">Reference: {config.referencePeriod}</div>
+        {isHistogramType && histogram && (
+          <div className="analytics-ref-period">
+            Range: {histogram.min.toFixed(config.decimals)} to {histogram.max.toFixed(config.decimals)} {config.unit}
+            {' · '}{histogram.percentNegative.toFixed(0)}% of ocean acidifying
+          </div>
+        )}
       </div>
 
       {/* ── Description ── */}
       <div className="analytics-description">{config.description}</div>
 
-      {/* ── Time controls: Daily / Monthly / Annual ── */}
-      <div className="analytics-controls">
-        <div className="control-label">Time</div>
-        <div className="control-group">
-          {config.resolutions.map(r => (
-            <button
-              key={r}
-              className={`control-btn${resolution === r ? ' active' : ''}`}
-              onClick={() => setResolution(r)}
-            >
-              {r === 'monthly' ? 'Monthly' : 'Annual'}
-            </button>
-          ))}
-        </div>
+      {/* ── Time controls: Daily / Monthly / Annual (hidden for static maps) ── */}
+      {!isHistogramType && (
+        <div className="analytics-controls">
+          <div className="control-label">Time</div>
+          <div className="control-group">
+            {config.resolutions.map(r => (
+              <button
+                key={r}
+                className={`control-btn${resolution === r ? ' active' : ''}`}
+                onClick={() => setResolution(r)}
+              >
+                {r === 'monthly' ? 'Monthly' : 'Annual'}
+              </button>
+            ))}
+          </div>
 
-        {/* Mode controls: Absolute / Anomalies */}
-        {config.supportsAnomalies && (
-          <>
-            <div className="control-label">Mode</div>
-            <div className="control-group">
-              <button
-                className={`control-btn${mode === 'absolute' ? ' active' : ''}`}
-                onClick={() => setMode('absolute')}
-              >
-                Absolute
-              </button>
-              <button
-                className={`control-btn${mode === 'anomalies' ? ' active' : ''}`}
-                onClick={() => setMode('anomalies')}
-              >
-                Anomalies
-              </button>
-            </div>
-          </>
-        )}
-      </div>
+          {/* Mode controls: Absolute / Anomalies */}
+          {config.supportsAnomalies && (
+            <>
+              <div className="control-label">Mode</div>
+              <div className="control-group">
+                <button
+                  className={`control-btn${mode === 'absolute' ? ' active' : ''}`}
+                  onClick={() => setMode('absolute')}
+                >
+                  Absolute
+                </button>
+                <button
+                  className={`control-btn${mode === 'anomalies' ? ' active' : ''}`}
+                  onClick={() => setMode('anomalies')}
+                >
+                  Anomalies
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* ── Interactive graph ── */}
       <div className="analytics-chart-area" style={{ height: `${chartHeight}px`, minHeight: '120px' }}>
         {loading ? (
           <div className="chart-loading">Loading data…</div>
+        ) : isHistogramType ? (
+          histogram && histogram.bins.length > 0 ? (
+            <HistogramChart
+              bins={histogram.bins}
+              unit={config.unit}
+              decimals={config.decimals}
+            />
+          ) : (
+            <div className="chart-loading">No data available</div>
+          )
         ) : chartSeries.length > 0 ? (
           <TimeSeriesChart
             series={chartSeries}
@@ -304,6 +356,7 @@ export function AnalyticsPanel({ viewer, active, currentDatasetId, chartHeight =
             decimals={config.decimals}
             yAxisFormat={config.yAxisFormat}
             yAxisRange={mode === 'anomalies' ? null : config.yAxisRange}
+            currentTime={currentTime}
             onPointSelect={setSelectedPoint}
           />
         ) : (

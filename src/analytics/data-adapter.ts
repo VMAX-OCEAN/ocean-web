@@ -15,7 +15,8 @@
 
 import { DATASETS, buildBinPath } from '../cesium/datasets';
 import { fetchBinData } from '../cesium/binary-data';
-import type { VariableConfig, VariableId, TimeSeriesPoint } from './types';
+import { tryGetPreAggregatedSeries } from '../cesium/timeseries-loader';
+import type { VariableConfig, VariableId, TimeSeriesPoint, SpatialStats, HistogramBin } from './types';
 
 /** Earth radius in km. */
 const R_KM = 6371;
@@ -144,6 +145,16 @@ export async function getFullTimeSeries(
   const cached = seriesCache.get(cacheKey);
   if (cached) return cached;
 
+  // Fast path: try the pre-aggregated time series JSON first. This is a
+  // small (~2KB) file computed server-side, avoiding the need to download
+  // and aggregate all 72+ .bin files (which can be 280MB+ per dataset).
+  const preAggregated = await tryGetPreAggregatedSeries(config);
+  if (preAggregated) {
+    seriesCache.set(cacheKey, preAggregated);
+    return preAggregated;
+  }
+
+  // Fallback: fetch all time steps and aggregate client-side.
   const dataset = DATASETS[config.datasetId];
   if (!dataset) throw new Error(`Dataset not found: ${config.datasetId}`);
 
@@ -152,7 +163,6 @@ export async function getFullTimeSeries(
   const times = dataset.times;
   const points: TimeSeriesPoint[] = [];
 
-  // Fetch all time steps and aggregate
   for (let t = 0; t < times.length; t++) {
     const binPath = buildBinPath(dataset, config.datasetVariableId, 0, t);
     try {
@@ -316,4 +326,66 @@ export function computeTrend(fullSeries: TimeSeriesPoint[]): { slope: number; r2
 /** Clear the series cache (e.g., when switching datasets). */
 export function clearSeriesCache(): void {
   seriesCache.clear();
+}
+
+/** Cache for spatial histograms (static maps, e.g. pH Trend). */
+const histogramCache = new Map<string, SpatialStats>();
+
+/**
+ * Compute a value-distribution histogram for a static spatial map
+ * (a dataset with no time dimension, e.g. pH Trend). Fetches the single
+ * .bin file, bins all finite values into `binCount` buckets spanning the
+ * variable's configured color-scale range, and computes summary stats.
+ */
+export async function getSpatialHistogram(
+  config: VariableConfig,
+  binCount = 20,
+): Promise<SpatialStats> {
+  const cacheKey = `${config.datasetId}:${config.datasetVariableId}`;
+  const cached = histogramCache.get(cacheKey);
+  if (cached) return cached;
+
+  const dataset = DATASETS[config.datasetId];
+  if (!dataset) throw new Error(`Dataset not found: ${config.datasetId}`);
+
+  const binPath = buildBinPath(dataset, config.datasetVariableId, 0, 0);
+  const data = await fetchBinData(binPath);
+
+  const rangeMin = config.colorScale.min;
+  const rangeMax = config.colorScale.max;
+  const span = rangeMax - rangeMin || 1;
+
+  const counts = new Array(binCount).fill(0);
+  let sum = 0, count = 0, min = Infinity, max = -Infinity, negativeCount = 0;
+
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i];
+    if (!Number.isFinite(v)) continue;
+    count++;
+    sum += v;
+    if (v < min) min = v;
+    if (v > max) max = v;
+    if (v < 0) negativeCount++;
+
+    const t = (v - rangeMin) / span;
+    const binIdx = Math.min(binCount - 1, Math.max(0, Math.floor(t * binCount)));
+    counts[binIdx]++;
+  }
+
+  const bins: HistogramBin[] = counts.map((c, i) => ({
+    rangeStart: rangeMin + (i / binCount) * span,
+    rangeEnd: rangeMin + ((i + 1) / binCount) * span,
+    count: c,
+  }));
+
+  const stats: SpatialStats = {
+    mean: count > 0 ? sum / count : NaN,
+    min: Number.isFinite(min) ? min : NaN,
+    max: Number.isFinite(max) ? max : NaN,
+    percentNegative: count > 0 ? (negativeCount / count) * 100 : 0,
+    bins,
+  };
+
+  histogramCache.set(cacheKey, stats);
+  return stats;
 }

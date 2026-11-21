@@ -1,5 +1,6 @@
 import * as Cesium from 'cesium';
-import { VAM_DEPTHS_M, VAM_BBOX, getSliceCanvas, canvasToBlobUrl } from './binary-data';
+import { VAM_DEPTHS_M, VAM_BBOX, getSliceCanvas } from './binary-data';
+import { CanvasImageryProvider } from './canvas-provider';
 
 /**
  * Preset locations = offline fallback buttons (D7 mandate beats).
@@ -123,24 +124,19 @@ export function showBboxVolume(
   (showBboxVolume as unknown as { _ctl?: AbortController })._ctl?.abort();
   (showBboxVolume as unknown as { _ctl?: AbortController })._ctl = ctl;
   getSliceCanvas('TEMP', 0, 6) // depth 5m, time 2019-03-30
-    .then(async (canvas) => {
+    .then((canvas) => {
       if (viewer.isDestroyed()) return;
-      const objUrl = await canvasToBlobUrl(canvas);
-      if (viewer.isDestroyed()) {
-        URL.revokeObjectURL(objUrl);
-        return;
-      }
       const clampedRect = Cesium.Rectangle.fromDegrees(
         clamped.west,
         clamped.south,
         clamped.east,
         clamped.north,
       );
-      const provider = new Cesium.SingleTileImageryProvider({
-        url: objUrl,
+      const provider = new CanvasImageryProvider({
+        canvas,
         rectangle: clampedRect,
-        tileWidth: 900,
-        tileHeight: 600,
+        tileWidth: canvas.width,
+        tileHeight: canvas.height,
       });
       const layer = viewer.imageryLayers.addImageryProvider(provider);
       imageryByViewer.set(viewer, [layer]);

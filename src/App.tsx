@@ -19,6 +19,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [viewer, setViewer] = useState<Cesium.Viewer | null>(null);
   const [currentDatasetId, setCurrentDatasetId] = useState<string | null>(null);
+  const [currentTime, setCurrentTime] = useState<string | null>(null);
 
   // Right sidebar sizing — user-controllable via the size overlay.
   const [analyticsWidth, setAnalyticsWidth] = useState(DEFAULT_SIZES.width);
@@ -35,6 +36,7 @@ function App() {
             viewer={viewer}
             active={!!viewer}
             onDatasetChange={setCurrentDatasetId}
+            onTimeChange={setCurrentTime}
           />
           <ProbePanel viewer={viewer} active={!!viewer} />
         </div>
@@ -118,6 +120,7 @@ function App() {
           viewer={viewer}
           active={!!viewer}
           currentDatasetId={currentDatasetId}
+          currentTime={currentTime}
           chartHeight={chartHeight}
         />
       </div>

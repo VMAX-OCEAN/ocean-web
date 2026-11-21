@@ -27,6 +27,9 @@ interface TimeSeriesChartProps {
   decimals: number;
   yAxisFormat: 'decimal' | 'integer' | 'percentage';
   yAxisRange: [number, number] | null;
+  /** Currently selected time step (synced with the globe play button).
+   *  Draws a vertical indicator line + highlighted dot at this position. */
+  currentTime?: string | null;
   /** Called when user hovers/clicks a point */
   onPointSelect?: (point: TimeSeriesPoint | null) => void;
 }
@@ -53,6 +56,7 @@ export function TimeSeriesChart({
   decimals,
   yAxisFormat,
   yAxisRange,
+  currentTime,
   onPointSelect,
 }: TimeSeriesChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -126,6 +130,51 @@ export function TimeSeriesChart({
     }
     return MARGIN.left;
   }, [chartType, trendXDomain, plotW]);
+
+  // ── Current time indicator (synced with globe play button) ──
+  // Finds the x position on the chart for the current time step, and
+  // the data point(s) at that time across all series (for highlighted dots).
+  const currentIndicator = useMemo(() => {
+    if (!currentTime || series.length === 0) return null;
+
+    // For seasonal charts: match by month
+    if (chartType === 'seasonal') {
+      const targetDate = new Date(currentTime);
+      const targetMonth = targetDate.getUTCMonth() + 1;
+      const x = MARGIN.left + ((targetMonth - 1) / 11) * plotW;
+      const dots: { x: number; y: number; color: string; isCurrent: boolean }[] = [];
+      for (const s of series) {
+        const p = s.points.find(pt => pt.month === targetMonth && Number.isFinite(pt.value));
+        if (p) {
+          dots.push({ x, y: yScale(p.value), color: s.color, isCurrent: s.isCurrent });
+        }
+      }
+      return { x, dots };
+    }
+
+    // For trend charts: match by date
+    if (trendXDomain) {
+      const t = new Date(currentTime).getTime();
+      if (!Number.isFinite(t)) return null;
+      const frac = (t - trendXDomain.min) / (trendXDomain.max - trendXDomain.min || 1);
+      const x = MARGIN.left + Math.max(0, Math.min(1, frac)) * plotW;
+      const dots: { x: number; y: number; color: string; isCurrent: boolean }[] = [];
+      for (const s of series) {
+        // Find the nearest point within 15 days
+        const p = s.points.find(pt =>
+          Math.abs(new Date(pt.date).getTime() - t) < 86400000 * 15 &&
+          Number.isFinite(pt.value)
+        );
+        if (p) {
+          const px = xForPoint(p);
+          dots.push({ x: px, y: yScale(p.value), color: s.color, isCurrent: s.isCurrent });
+        }
+      }
+      return { x, dots };
+    }
+
+    return null;
+  }, [currentTime, series, chartType, trendXDomain, plotW, yScale, xForPoint]);
 
   // Y-axis ticks
   const yTicks = useMemo(() => {
@@ -347,6 +396,32 @@ export function TimeSeriesChart({
             strokeWidth={1}
           />
         ))}
+
+        {/* Current time indicator (synced with globe play button) */}
+        {currentIndicator && (
+          <>
+            <line
+              x1={currentIndicator.x}
+              y1={MARGIN.top}
+              x2={currentIndicator.x}
+              y2={MARGIN.top + plotH}
+              stroke="rgba(250, 204, 21, 0.7)"
+              strokeWidth={1.5}
+              strokeDasharray="3 2"
+            />
+            {currentIndicator.dots.map((d, i) => (
+              <circle
+                key={`current-pt-${i}`}
+                cx={d.x}
+                cy={d.y}
+                r={d.isCurrent ? 5 : 3.5}
+                fill={d.color}
+                stroke="rgba(250, 204, 21, 0.9)"
+                strokeWidth={2}
+              />
+            ))}
+          </>
+        )}
 
         {/* Mouse capture rect */}
         <rect

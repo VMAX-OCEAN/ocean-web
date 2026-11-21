@@ -4,14 +4,16 @@
  * One source of truth for globe + graph + sidebar.
  */
 
-/** The 6 primary ocean health variables (matches MyOcean Health). */
+/** The primary ocean health variables (matches MyOcean Health), plus
+ *  ph_trend which is a static spatial map (no time dimension). */
 export type VariableId =
   | 'sst'
   | 'mhw'
   | 'sea_level'
   | 'ocean_acidification'
   | 'arctic_ice'
-  | 'antarctic_ice';
+  | 'antarctic_ice'
+  | 'ph_trend';
 
 /** Time resolution. Daily not available in our monthly data. */
 export type Resolution = 'monthly' | 'annual';
@@ -19,8 +21,31 @@ export type Resolution = 'monthly' | 'annual';
 /** Absolute = measured value. Anomalies = deviation from reference. */
 export type Mode = 'absolute' | 'anomalies';
 
-/** Chart type per variable. */
-export type ChartType = 'seasonal' | 'trend';
+/** Chart type per variable.
+ *  'seasonal' / 'trend' — time series (line chart).
+ *  'histogram' — static spatial distribution (bar chart), for datasets
+ *  with no time dimension (e.g. pH Trend, a single global trend map). */
+export type ChartType = 'seasonal' | 'trend' | 'histogram';
+
+/** A single bin in a spatial value histogram. */
+export interface HistogramBin {
+  /** Lower bound of the bin's value range. */
+  rangeStart: number;
+  /** Upper bound of the bin's value range. */
+  rangeEnd: number;
+  /** Number of grid cells whose value falls in this bin. */
+  count: number;
+}
+
+/** Summary statistics for a static spatial map. */
+export interface SpatialStats {
+  mean: number;
+  min: number;
+  max: number;
+  /** % of valid ocean cells with a negative (decreasing) value. */
+  percentNegative: number;
+  bins: HistogramBin[];
+}
 
 /** A single point in a time series. */
 export interface TimeSeriesPoint {

@@ -180,7 +180,7 @@ export const VARIABLE_CONFIGS: Record<VariableId, VariableConfig> = {
     trendStatement: '−0.0017 pH/year',
     uncertainty: '±0.0002 pH/year',
     datasetId: 'ph_surface',
-    datasetVariableId: 'ph',
+    datasetVariableId: 'ph_surface',
     aggregation: 'mean',
     areaWeighted: true,
     yAxisRange: [7.75, 8.35],
@@ -218,6 +218,43 @@ export const VARIABLE_CONFIGS: Record<VariableId, VariableConfig> = {
     aggregation: 'extent',
     areaWeighted: false,
     extentThreshold: 0.15,
+    yAxisRange: null,
+  },
+
+  // ── Ocean Acidification pH Trend (static spatial map) ──
+  ph_trend: {
+    id: 'ph_trend',
+    title: 'Ocean Acidification pH Trend',
+    description:
+      'Global rate of surface pH change (per year), derived from long-term satellite and ' +
+      'in-situ observations. Negative values indicate acidification (pH decreasing over time). ' +
+      'This is a static global map — no time axis — so the chart below shows the distribution ' +
+      'of trend values across the ocean instead of a time series.',
+    unit: 'pH/yr',
+    chartType: 'histogram',
+    resolutions: ['monthly'],
+    supportsAnomalies: false,
+    supportsYearComparison: false,
+    referencePeriod: 'Multi-decade trend (static)',
+    referenceYears: [],
+    availableYears: [],
+    defaultSelectedYears: [],
+    colorScale: {
+      stops: ['#dc2626', '#f97316', '#fbbf24', '#f1f5f9', '#bae6fd', '#38bdf8', '#1d4ed8'],
+      min: -0.003,
+      max: 0.0005,
+      unit: 'pH/yr',
+      ticks: [-0.003, -0.002, -0.001, 0, 0.0005],
+    },
+    yAxisFormat: 'decimal',
+    decimals: 5,
+    hasUncertainty: true,
+    trendStatement: 'Most oceans acidifying',
+    uncertainty: 'see pH Trend Unc. layer',
+    datasetId: 'ph_trend',
+    datasetVariableId: 'ph_trend',
+    aggregation: 'mean',
+    areaWeighted: true,
     yAxisRange: null,
   },
 
@@ -268,6 +305,7 @@ export const VARIABLE_IDS: VariableId[] = [
   'mhw',
   'sea_level',
   'ocean_acidification',
+  'ph_trend',
   'arctic_ice',
   'antarctic_ice',
 ];

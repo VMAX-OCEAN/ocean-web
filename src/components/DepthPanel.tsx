@@ -21,6 +21,7 @@ interface DepthPanelProps {
   viewer: Cesium.Viewer | null;
   active: boolean;
   onDatasetChange?: (datasetId: string) => void;
+  onTimeChange?: (time: string) => void;
 }
 
 const FREQ_LABEL: Record<TimeFrequency, string> = {
@@ -30,11 +31,33 @@ const FREQ_LABEL: Record<TimeFrequency, string> = {
 };
 
 /**
+ * Fly the camera to a dataset's bounding box — but only if the dataset
+ * covers a small ("regional") part of the globe. Global datasets (SST,
+ * pH, sea level, MHW) keep the camera where it is, since re-framing a
+ * near-global bbox on every switch would feel disruptive. Regional
+ * datasets (Arctic/Antarctic sea ice, VAM Indian Ocean) always fly,
+ * otherwise their small footprint is invisible from a global camera view.
+ */
+function flyToDatasetBbox(viewer: Cesium.Viewer | null, ds: DatasetConfig): void {
+  if (!viewer || viewer.isDestroyed()) return;
+  const { west, south, east, north } = ds.bbox;
+  const latSpan = north - south;
+  const lonSpan = east - west;
+  const isRegional = latSpan < 150 || lonSpan < 300;
+  if (!isRegional) return;
+
+  viewer.camera.flyTo({
+    destination: Cesium.Rectangle.fromDegrees(west, south, east, north),
+    duration: 1.8,
+  });
+}
+
+/**
  * Ocean data controls — product-first layer browser.
  * Six primary product cards + contextual active-layer config.
  * All hooks are called unconditionally (Rules of Hooks).
  */
-export function DepthPanel({ viewer, active, onDatasetChange }: DepthPanelProps) {
+export function DepthPanel({ viewer, active, onDatasetChange, onTimeChange }: DepthPanelProps) {
   // ALL hooks first — never after any early return
   const [datasetId, setDatasetId] = useState<string>('ph_trend');
   const [depth, setDepth] = useState<number>(0);
@@ -53,6 +76,7 @@ export function DepthPanel({ viewer, active, onDatasetChange }: DepthPanelProps)
   // Auto-load default slice on mount
   useEffect(() => {
     if (!viewer || !active) return;
+    onDatasetChange?.(datasetId);
     if (datasetId === 'vam') {
       const dsVar = DATASETS.vam.variables[0];
       showDepthLayers(viewer, 0, 0, 0, 0, DEPTHS_M[0], 'TEMP', DEFAULT_TIME,
@@ -60,12 +84,14 @@ export function DepthPanel({ viewer, active, onDatasetChange }: DepthPanelProps)
       setDepth(DEPTHS_M[0]);
       setVariable('temp');
       setTime(DEFAULT_TIME);
+      onTimeChange?.(DEFAULT_TIME);
     } else {
       const ds = DATASETS[datasetId];
       showDatasetSlice(viewer, datasetId, ds.variables[0].id, 0, 0);
       setVariable(ds.variables[0].id);
       setTime(ds.times[0]);
       setDepth(ds.depths[0]);
+      onTimeChange?.(ds.times[0]);
     }
     setStacked(true);
     return () => {
@@ -102,6 +128,7 @@ export function DepthPanel({ viewer, active, onDatasetChange }: DepthPanelProps)
       setDepth(DEPTHS_M[0]);
       setVariable('temp');
       setTime(DEFAULT_TIME);
+      onTimeChange?.(DEFAULT_TIME);
       const dsVar = ds.variables[0];
       showDepthLayers(viewer, 0, 0, 0, 0, DEPTHS_M[0], 'TEMP', DEFAULT_TIME,
         { min: dsVar.min, max: dsVar.max });
@@ -109,9 +136,15 @@ export function DepthPanel({ viewer, active, onDatasetChange }: DepthPanelProps)
       setDepth(ds.depths[0]);
       setVariable(ds.variables[0].id);
       setTime(ds.times[0]);
+      onTimeChange?.(ds.times[0]);
       showDatasetSlice(viewer, id, ds.variables[0].id, 0, 0);
     }
     setStacked(true);
+    // Regional datasets (Arctic/Antarctic ice, VAM Indian Ocean) cover a
+    // small area of the globe. Without moving the camera, the new layer
+    // renders outside the current viewport and looks like "nothing changed".
+    // Fly to the dataset's bbox so the new data is always visible.
+    flyToDatasetBbox(viewer, ds);
   };
 
   const pick = (d: number) => {
@@ -132,6 +165,7 @@ export function DepthPanel({ viewer, active, onDatasetChange }: DepthPanelProps)
     stopRef.current = true;
     setPlaying(false);
     setTime(t);
+    onTimeChange?.(t);
     render(depth, variable, t);
   };
 
@@ -147,9 +181,10 @@ export function DepthPanel({ viewer, active, onDatasetChange }: DepthPanelProps)
       i = (i + 1) % times.length;
       const t = times[i];
       setTime(t);
+      onTimeChange?.(t);
       render(depth, variable, t);
       if (i < times.length - 1) {
-        window.setTimeout(step, 900);
+        window.setTimeout(step, 500);
       } else {
         setPlaying(false);
       }

@@ -130,7 +130,7 @@ export const DATASETS: Record<string, DatasetConfig> = {
     depths: [0],
     times: monthlyTimes(2019, 1, 2024, 12),
     variables: [
-      { id: 'ph', label: 'pH', units: 'pH', min: 7.75, max: 8.35 },
+      { id: 'ph_surface', label: 'pH', units: 'pH', min: 7.75, max: 8.35 },
     ],
     timeFrequency: 'monthly',
     dataPath: '/release-data/ph',
